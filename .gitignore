@@ -1,0 +1,17 @@
+# Google credentials
+*.pickle
+token.pickle
+credentials.json
+client_secret*.json
+
+# Output files
+*.xlsx
+*.csv
+*_raw.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Temp scripts
+fetch_today.py
