@@ -2,7 +2,7 @@
 """
 TimeTree to Spreadsheet Exporter
 
-Exports TimeTree calendar events to CSV or Excel (.xlsx) format.
+Exports TimeTree calendar events to CSV, Excel (.xlsx), or Google Sheets.
 Uses the TimeTree web API (reverse-engineered from the web app).
 """
 
@@ -241,6 +241,159 @@ def export_to_xlsx(events, labels, output_path):
     print(f"已匯出 {len(events)} 筆事件至 {output_path}")
 
 
+def build_rows(events, labels):
+    """Build header + data rows for spreadsheet output."""
+    headers = [
+        "標題", "類型", "全天", "開始時間", "結束時間",
+        "開始時區", "結束時區", "地點", "網址", "備註",
+        "標籤", "建立時間", "更新時間",
+    ]
+    rows = [headers]
+    for event in sorted(events, key=lambda e: e.get("start_at", 0)):
+        label_id = event.get("label_id")
+        label_name = labels.get(label_id, "")
+        rows.append([
+            event.get("title", ""),
+            event_type_str(event),
+            "是" if event.get("all_day") else "否",
+            ms_to_datetime(event.get("start_at"), event.get("start_timezone")),
+            ms_to_datetime(event.get("end_at"), event.get("end_timezone")),
+            event.get("start_timezone", ""),
+            event.get("end_timezone", ""),
+            event.get("location", ""),
+            event.get("url", ""),
+            event.get("note", ""),
+            label_name,
+            ms_to_datetime(event.get("created_at")),
+            ms_to_datetime(event.get("updated_at")),
+        ])
+    return rows
+
+
+def get_google_creds(credentials_file):
+    """Obtain Google API credentials via OAuth or service account."""
+    import os
+
+    if credentials_file and os.path.exists(credentials_file):
+        # Check if it's a service account or OAuth client credentials
+        with open(credentials_file) as f:
+            cred_data = json.load(f)
+
+        if cred_data.get("type") == "service_account":
+            from google.oauth2.service_account import Credentials
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            return Credentials.from_service_account_file(
+                credentials_file, scopes=scopes
+            )
+        else:
+            # OAuth client credentials
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            from google.auth.transport.requests import Request
+            import pickle
+
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            token_path = os.path.join(
+                os.path.dirname(credentials_file), "token.pickle"
+            )
+
+            creds = None
+            if os.path.exists(token_path):
+                with open(token_path, "rb") as token:
+                    creds = pickle.load(token)
+
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        credentials_file, scopes
+                    )
+                    creds = flow.run_local_server(port=0)
+                with open(token_path, "wb") as token:
+                    pickle.dump(creds, token)
+
+            return creds
+
+    # Fallback: try default application credentials
+    import google.auth
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    return creds
+
+
+def export_to_google_sheets(events, labels, cal_name, credentials_file=None,
+                            spreadsheet_url=None):
+    """Export events to Google Sheets."""
+    try:
+        import gspread
+    except ImportError:
+        print("錯誤：需要 gspread 套件。請執行: pip install gspread google-auth google-auth-oauthlib")
+        sys.exit(1)
+
+    creds = get_google_creds(credentials_file)
+    gc = gspread.authorize(creds)
+
+    rows = build_rows(events, labels)
+    sheet_title = f"TimeTree - {cal_name}"
+
+    if spreadsheet_url:
+        # Open existing spreadsheet
+        sh = gc.open_by_url(spreadsheet_url)
+        # Add a new worksheet or use the first one
+        try:
+            ws = sh.worksheet(cal_name)
+            ws.clear()
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(title=cal_name, rows=len(rows), cols=len(rows[0]))
+    else:
+        # Create new spreadsheet
+        sh = gc.create(sheet_title)
+        ws = sh.sheet1
+        ws.update_title(cal_name)
+
+    # Write all data at once
+    ws.update(rows, value_input_option="USER_ENTERED")
+
+    # Format header row (bold + background color)
+    ws.format("1:1", {
+        "textFormat": {"bold": True, "foregroundColorStyle": {"rgbColor": {"red": 1, "green": 1, "blue": 1}}},
+        "backgroundColor": {"red": 0.267, "green": 0.447, "blue": 0.769},
+        "horizontalAlignment": "CENTER",
+    })
+
+    # Freeze header row
+    ws.freeze(rows=1)
+
+    # Auto-resize columns
+    body = {
+        "requests": [{
+            "autoResizeDimensions": {
+                "dimensions": {
+                    "sheetId": ws.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": len(rows[0]),
+                }
+            }
+        }]
+    }
+    sh.batch_update(body)
+
+    url = sh.url
+    print(f"已匯出 {len(events) } 筆事件至 Google 試算表")
+    print(f"連結：{url}")
+
+    if not spreadsheet_url:
+        print("\n注意：新建的試算表預設為私人。")
+        share = input("是否要設為「知道連結的人都能檢視」？(y/n): ").strip().lower()
+        if share in ("y", "yes", "是"):
+            sh.share(None, perm_type="anyone", role="reader")
+            print("已設為公開檢視。")
+
+    return url
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="將 TimeTree 行事曆匯出為試算表 (CSV/Excel)"
@@ -252,11 +405,19 @@ def main():
         "-p", "--password", help="TimeTree 帳號密碼"
     )
     parser.add_argument(
-        "-f", "--format", choices=["csv", "xlsx"], default="xlsx",
-        help="輸出格式 (預設: xlsx)"
+        "-f", "--format", choices=["csv", "xlsx", "gsheet"], default="xlsx",
+        help="輸出格式：csv, xlsx（預設）, gsheet（Google 試算表）"
     )
     parser.add_argument(
         "-o", "--output", help="輸出檔案路徑 (預設: timetree_events.xlsx)"
+    )
+    parser.add_argument(
+        "--google-creds",
+        help="Google API 憑證檔案路徑 (service account JSON 或 OAuth client_secret JSON)"
+    )
+    parser.add_argument(
+        "--spreadsheet-url",
+        help="現有 Google 試算表 URL（不指定則建立新的）"
     )
     parser.add_argument(
         "-c", "--calendar", help="行事曆名稱 (不指定則顯示選單)"
@@ -327,18 +488,25 @@ def main():
 
         print(f"取得 {len(events)} 筆事件。")
 
-        # Determine output path
         fmt = args.format
-        if args.output and len(selected) == 1:
-            output_path = args.output
-        else:
-            safe_name = cal_name.replace("/", "_").replace("\\", "_")
-            output_path = f"timetree_{safe_name}.{fmt}"
 
-        if fmt == "csv":
-            export_to_csv(events, labels, output_path)
+        if fmt == "gsheet":
+            export_to_google_sheets(
+                events, labels, cal_name,
+                credentials_file=args.google_creds,
+                spreadsheet_url=args.spreadsheet_url,
+            )
         else:
-            export_to_xlsx(events, labels, output_path)
+            if args.output and len(selected) == 1:
+                output_path = args.output
+            else:
+                safe_name = cal_name.replace("/", "_").replace("\\", "_")
+                output_path = f"timetree_{safe_name}.{fmt}"
+
+            if fmt == "csv":
+                export_to_csv(events, labels, output_path)
+            else:
+                export_to_xlsx(events, labels, output_path)
 
     print("\n匯出完成！")
 
