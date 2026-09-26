@@ -1,0 +1,25 @@
+name = "dispatch-platform"
+main = "src/index.tsx"
+compatibility_date = "2026-09-01"
+
+[vars]
+# 平台名稱（之後決定正式名稱再改）
+APP_NAME = "南部同業派單平台"
+# 這些手機號碼註冊後自動成為管理員（逗號分隔）
+ADMIN_PHONES = ""
+# 接單後幾小時內退單會被記點
+CANCEL_STRIKE_HOURS = "3"
+
+# LINE 官方帳號（選填，用 `wrangler secret put` 設定，不要寫在這裡）
+# LINE_CHANNEL_SECRET
+# LINE_CHANNEL_ACCESS_TOKEN
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dispatch"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "DOCS"
+bucket_name = "dispatch-docs"
