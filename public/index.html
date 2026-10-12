@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LINE 客戶管理</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>LINE 客戶管理</h1>
+    <nav>
+      <button data-tab="focus" class="active">今日關懷</button>
+      <button data-tab="customers">客戶</button>
+      <button data-tab="orders">訂單</button>
+    </nav>
+    <div id="status" class="muted"></div>
+  </header>
+
+  <main>
+    <section id="tab-focus">
+      <div class="toolbar">
+        <h2 id="focus-title">今日關懷清單</h2>
+        <span class="spacer"></span>
+        <button id="run-daily" class="secondary" title="立即執行每日排程（自動提醒 + 推播清單給客服）">立即推播清單給客服</button>
+        <button id="refresh-focus" class="secondary">重新整理</button>
+      </div>
+      <div id="focus-list"></div>
+    </section>
+
+    <section id="tab-customers" hidden>
+      <div class="toolbar">
+        <input id="customer-q" type="search" placeholder="搜尋名稱、電話、備註…">
+        <input id="customer-tag" type="search" placeholder="標籤" size="8">
+        <span class="spacer"></span>
+        <button id="sync-followers" class="secondary" title="僅限認證 / 進階帳號">同步 LINE 好友</button>
+        <a class="button secondary" href="/api/export/customers.csv">匯出 CSV</a>
+        <button id="new-customer">新增客戶</button>
+      </div>
+      <div class="table-wrap"><table id="customer-table"></table></div>
+    </section>
+
+    <section id="tab-orders" hidden>
+      <div class="toolbar">
+        <select id="order-status"><option value="">全部狀態</option></select>
+        <span class="spacer"></span>
+      </div>
+      <div class="table-wrap"><table id="order-table"></table></div>
+    </section>
+  </main>
+
+  <dialog id="drawer">
+    <div id="drawer-body"></div>
+  </dialog>
+
+  <div id="toast" hidden></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
