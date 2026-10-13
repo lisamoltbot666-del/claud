@@ -1,0 +1,36 @@
+# Render Blueprint：在 Render 按「New → Blueprint」選這個 repo 就會照這裡建立服務
+# 說明：docs/deploy-render.md
+services:
+  - type: web
+    name: line-crm
+    runtime: node
+    # 需要付費方案才能掛載永久磁碟（資料庫存在磁碟上，免費方案重新部署會遺失資料）
+    plan: starter
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DB_PATH
+        value: /var/data/crm.db
+      - key: TZ_NAME
+        value: Asia/Taipei
+      # 後台密碼：建立時 Render 會請你填
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DAILY_REPORT_HOUR
+        value: "9"
+      - key: PAYMENT_DUE_DAYS
+        value: "3"
+      - key: DEFAULT_REORDER_DAYS
+        value: "30"
+      - key: AUTO_PAYMENT_REMINDER
+        value: "false"
+      - key: AUTO_REORDER_REMINDER
+        value: "false"

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig, loadEnvFile } from './config.js';
@@ -278,6 +279,15 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
         const file = path.join(PUBLIC_DIR, STATIC[url.pathname]);
         return send(res, 200, fs.readFileSync(file), { 'Content-Type': MIME[path.extname(file)], 'Cache-Control': 'no-cache' });
       }
+      if (req.method === 'GET' && url.pathname === '/api/export/backup.db') {
+        const file = path.join(os.tmpdir(), `crm-backup-${process.pid}-${Date.now()}.db`);
+        try {
+          store.backupTo(file);
+          return send(res, 200, fs.readFileSync(file), { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="crm-backup-${today(config.tz)}.db"` });
+        } finally {
+          fs.rmSync(file, { force: true });
+        }
+      }
       const exports = { '/api/export/customers.csv': ['customers', exportCustomersCsv], '/api/export/orders.csv': ['orders', exportOrdersCsv] };
       if (req.method === 'GET' && exports[url.pathname]) {
         const [name, fn] = exports[url.pathname];
@@ -317,7 +327,7 @@ function main() {
     if (!config.adminPassword) console.warn('⚠ 尚未設定 ADMIN_PASSWORD，後台無法登入');
   });
   const service = new ReminderService({ store, lines, config });
-  startScheduler({ service, store, config, baseUrl: process.env.PUBLIC_URL || '' });
+  startScheduler({ service, store, config, baseUrl: process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '' });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main();
