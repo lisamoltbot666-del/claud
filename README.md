@@ -54,7 +54,7 @@ npm test                # 執行測試
 
 ### 串接 LINE 官方帳號（每個品牌做一次）
 
-1. 把系統部署到有 HTTPS 的網址（例如 Render、Railway、Fly.io、自己的主機＋Cloudflare Tunnel，本機測試可用 ngrok）。
+1. 把系統部署到有 HTTPS 的網址。**建議用 Render，已附設定檔，照 [docs/deploy-render.md](docs/deploy-render.md) 一步一步做即可**；也可用 Railway、Fly.io、自己的主機＋Cloudflare Tunnel，本機測試可用 ngrok。
 2. 後台「品牌」頁 →「新增品牌」：填品牌名稱、網址代號（英數字，如 `chicken`）、代表色、匯款資訊。
 3. 到 [LINE Developers](https://developers.line.biz/console/) 找到該品牌官方帳號的 **Messaging API channel**，把 **Channel secret** 與 **Channel access token（長期）** 貼到品牌設定（金鑰不會在後台再顯示，留空表示不修改）。
 4. 在同一個 Messaging API 設定頁：**Webhook URL** 填品牌頁顯示的 `https://你的網址/webhook/<代號>`，按 Verify，並開啟 **Use webhook**。
@@ -91,7 +91,7 @@ npm test                # 執行測試
 - **同一位客人加了多個品牌**：LINE 給每個官方帳號的 userId 可能不同，系統會把這位客人在各品牌的資料分開記錄（各品牌的消費紀錄、回購週期互不影響）。
 - **既有好友**：LINE 只會在好友互動（加好友、傳訊息）時把資料送到 webhook。一般帳號的既有好友要等他們傳訊息後才會出現；認證／進階帳號可在「品牌」頁按該品牌的「同步好友」一次匯入。
 - **客服在官方帳號後台回覆的訊息**不會傳到本系統，回覆後請在清單按「標記已回覆」。
-- **個資**：資料庫（`data/crm.db`）含客戶個資，請設定強密碼、使用 HTTPS，並定期備份這個檔案。
+- **個資與備份**：資料庫（`data/crm.db`，Render 上為 `/var/data/crm.db`）含客戶個資，請設定強密碼、使用 HTTPS。後台「品牌」頁右上角可「下載備份」完整資料庫，請定期下載保存。
 
 ## 專案結構
 

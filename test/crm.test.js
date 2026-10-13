@@ -198,4 +198,9 @@ test('HTTP：後台需登入、webhook 驗簽、API 流程', async (t) => {
   store.updateCustomer(id, { note: '=HYPERLINK("x")' });
   const csv = (await call('/api/export/customers.csv')).data;
   assert.match(csv, /"'=HYPERLINK\(""x""\)"/);
+
+  const backup = await fetch(`${base}/api/export/backup.db`, { headers: auth });
+  assert.equal(backup.status, 200);
+  assert.equal(Buffer.from(await backup.arrayBuffer()).subarray(0, 15).toString(), 'SQLite format 3');
+  assert.equal((await fetch(`${base}/api/export/backup.db`)).status, 401, '備份需要登入');
 });

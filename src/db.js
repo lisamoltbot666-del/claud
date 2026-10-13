@@ -400,6 +400,12 @@ export class Store {
     this.setKv('staff_customer_ids', JSON.stringify([...ids]));
   }
 
+  // 完整備份：產生一份一致的資料庫副本（不影響正在使用的資料庫）
+  backupTo(file) {
+    fs.rmSync(file, { force: true });
+    this.db.prepare('VACUUM INTO ?').run(file);
+  }
+
   // ---------- kv ----------
   getKv(key) {
     return this.get('SELECT value FROM kv WHERE key = ?', key)?.value ?? null;
