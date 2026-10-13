@@ -1,5 +1,6 @@
 import { addDays, dateOf, localHour, today } from './dates.js';
 import { buildFocusList, formatFocusSummary } from './focus.js';
+import { customerStats, parseItems } from './profile.js';
 
 const nameOf = (c) => c.real_name || c.display_name || '您好';
 
@@ -12,8 +13,36 @@ export const templates = {
       '完成匯款後，請回覆「已匯款 帳號末五碼」，我們會盡快為您確認，謝謝！',
     ].filter(Boolean).join('\n');
   },
-  reorder(c, _o, cfg) {
-    return `${nameOf(c)} 您好，這裡是${cfg.shopName} 😊\n距離上次訂購已經一段時間了，商品還夠用嗎？需要再幫您安排一份嗎？直接回覆這則訊息就可以下單喔！`;
+  // 回購提醒依客戶分群換說法（參考 ThinkWithBlack MK-390 第一次回購促進計畫）：
+  //   首購客：問使用感受，邀請回購同款或試其他商品（第二件不一定要同款）
+  //   回購客 / 忠實客：有自己的購買間隔時才說「差不多用完」，其他只講事實天數
+  //   沉睡客：好久不見，不假設商品用完、不催單
+  // 只引用訂單裡有的事實（上次品項、天數），不寫資料沒有的優惠或服務
+  reorder(c, _o, cfg, stats) {
+    const hello = `${nameOf(c)} 您好，這裡是${cfg.shopName} 😊`;
+    const reply = '想再訂、或想問其他商品，直接回覆這則訊息就可以，我們會幫您安排！';
+    if (!stats?.orderCount) return `${hello}\n距離上次訂購已經一段時間了，商品還夠用嗎？需要再幫您安排一份嗎？${reply}`;
+    const items = parseItems(stats.lastItems).join('、');
+    const what = items ? `的${items}` : '的商品';
+    if (stats.segment === 'dormant') {
+      return [
+        `${nameOf(c)} 您好，好久不見，這裡是${cfg.shopName} 💛`,
+        `距離您上次訂購${what}已經 ${stats.daysSinceLastOrder} 天了，最近還好嗎？`,
+        '如果還有需要，或想看看其他商品，隨時回覆這則訊息，我們都在這裡！',
+      ].join('\n');
+    }
+    if (stats.segment === 'first') {
+      return [
+        hello,
+        `謝謝您第一次選擇我們！您 ${stats.daysSinceLastOrder} 天前訂購${what}，用起來還順手嗎？有任何感想都歡迎告訴我們。`,
+        `如果快用完了，可以幫您再準備一份；也想試試其他商品的話，跟我們說說您的需求就好。`,
+        reply,
+      ].join('\n');
+    }
+    const timing = stats.cycle?.source?.startsWith('依')
+      ? `您平常大約每 ${stats.cycle.days} 天補貨一次，上次訂購${what}到現在 ${stats.daysSinceLastOrder} 天，應該差不多要用完了吧？`
+      : `距離上次訂購${what}已經 ${stats.daysSinceLastOrder} 天了，還夠用嗎？`;
+    return [hello, `謝謝您一直以來的支持！${timing}`, '需要的話可以幫您安排同樣的內容，想換換其他商品也沒問題。', reply].join('\n');
   },
   care(c, _o, cfg) {
     return `${nameOf(c)} 您好，謝謝您加入${cfg.shopName}的好友 💛\n有任何想了解的商品或問題，直接在這裡留言，我們會很快回覆您！`;
@@ -47,7 +76,7 @@ export class ReminderService {
     if (!c) throw new Error('找不到客戶');
     const order = orderId ? this.store.getOrder(orderId) : null;
     const { line, info } = this.context(c);
-    const body = text?.trim() || templates[kind]?.(c, order, info);
+    const body = text?.trim() || templates[kind]?.(c, order, info, this.stats(c, kind));
     if (!body) throw new Error('訊息內容為空');
     if (!c.line_user_id || !c.is_friend) {
       const error = '此客戶不是 LINE 好友，無法推播';
@@ -68,7 +97,13 @@ export class ReminderService {
   preview({ customerId, kind, orderId = null }) {
     const c = this.store.getCustomer(customerId);
     const order = orderId ? this.store.getOrder(orderId) : null;
-    return templates[kind]?.(c, order, this.context(c).info) ?? '';
+    return templates[kind]?.(c, order, this.context(c).info, this.stats(c, kind)) ?? '';
+  }
+
+  // 回購提醒需要消費統計（上次品項、距今天數、分群）
+  stats(customer, kind) {
+    if (kind !== 'reorder' || !customer) return null;
+    return customerStats(customer, this.store.listOrders({ customerId: customer.id }), this.config);
   }
 
   // 每日清單推給客服：設定為客服的客戶用其所屬品牌的帳號推播；STAFF_LINE_USER_IDS 則用第一個品牌

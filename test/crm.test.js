@@ -199,3 +199,31 @@ test('HTTP：後台需登入、webhook 驗簽、API 流程', async (t) => {
   const csv = (await call('/api/export/customers.csv')).data;
   assert.match(csv, /"'=HYPERLINK\(""x""\)"/);
 });
+
+test('回購提醒文字依分群：首購、回購（依平均週期）、沉睡', () => {
+  const { config, store, lines } = setup();
+  const svc = new ReminderService({ store, lines, config, logger: silent });
+
+  const first = store.upsertLineCustomer(B, 'F1', { displayName: '首購' });
+  store.createOrder(first.id, { order_date: addDays(T, -35), status: 'completed', amount: 800, items: '滴雞精 x10' });
+  const f = svc.preview({ customerId: first.id, kind: 'reorder' });
+  assert.match(f, /第一次選擇/);
+  assert.match(f, /35 天前訂購的滴雞精/);
+  assert.doesNotMatch(f, /x10/);
+
+  const rep = store.upsertLineCustomer(B, 'R1', { displayName: '老客' });
+  store.createOrder(rep.id, { order_date: addDays(T, -50), status: 'completed', amount: 800, items: '豆漿' });
+  store.createOrder(rep.id, { order_date: addDays(T, -25), status: 'completed', amount: 800, items: '豆漿、禮盒' });
+  const r = svc.preview({ customerId: rep.id, kind: 'reorder' });
+  assert.match(r, /每 25 天補貨一次/);
+  assert.match(r, /豆漿、禮盒/);
+
+  const sleep = store.upsertLineCustomer(B, 'D1', { displayName: '沉睡' });
+  store.createOrder(sleep.id, { order_date: addDays(T, -120), status: 'completed', amount: 800, items: '禮盒' });
+  const d = svc.preview({ customerId: sleep.id, kind: 'reorder' });
+  assert.match(d, /好久不見/);
+  assert.doesNotMatch(d, /用完/);
+
+  const none = store.upsertLineCustomer(B, 'N1', { displayName: '新客' });
+  assert.match(svc.preview({ customerId: none.id, kind: 'reorder' }), /測試店/);
+});
