@@ -1,8 +1,20 @@
-import { addDays, dateOf, localHour, today } from './dates.js';
+import { addDays, dateOf, diffDays, localHour, today } from './dates.js';
+import { SERVICE_TYPES } from './db.js';
 import { buildFocusList, formatFocusSummary } from './focus.js';
 import { customerStats, parseItems } from './profile.js';
 
 const nameOf = (c) => c.real_name || c.display_name || '您好';
+
+// 「2026-10-14」→「10/14（二）」
+const shortDate = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}（${'日一二三四五六'[new Date(`${d}T00:00:00Z`).getUTCDay()]}）`;
+const RELATIVE_DAYS = { 0: '今天', 1: '明天', 2: '後天' };
+
+// 首次客的回訪邀請：問這趟的感受，再邀請下次用車（mk-390：先把一次客推到第二次）
+const FIRST_TIME = {
+  airport: ['謝謝您第一次搭乘我們的機場接送！', '的行程還順利嗎？有任何建議都歡迎告訴我們。', '下次出國或回國需要接送，也可以交給我們。'],
+  charter: ['謝謝您第一次選擇我們的包車！', '的行程玩得開心嗎？有任何建議都歡迎告訴我們。', '下次家庭出遊、公司旅遊或接送長輩需要包車，也可以交給我們。'],
+  rental: ['謝謝您第一次向我們租車！', '的自駕行程還順利嗎？車況或服務有任何建議，都歡迎告訴我們。', '下次出遊需要租車，也可以交給我們。'],
+};
 
 export const templates = {
   payment(c, o, cfg) {
@@ -13,39 +25,66 @@ export const templates = {
       '完成匯款後，請回覆「已匯款 帳號末五碼」，我們會盡快為您確認，謝謝！',
     ].filter(Boolean).join('\n');
   },
-  // 回購提醒依客戶分群換說法（參考 ThinkWithBlack MK-390 第一次回購促進計畫）：
-  //   首購客：問使用感受，邀請回購同款或試其他商品（第二件不一定要同款）
-  //   回購客 / 忠實客：有自己的購買間隔時才說「差不多用完」，其他只講事實天數
-  //   沉睡客：好久不見，不假設商品用完、不催單
-  // 只引用訂單裡有的事實（上次品項、天數），不寫資料沒有的優惠或服務
+  // 回訪邀請依客戶分群與上次的服務換說法（參考 ThinkWithBlack MK-390 第一次回購促進計畫）：
+  //   首次客：問這趟行程的感受，邀請下次再用
+  //   回頭客 / 忠實客：有自己的用車間隔時才提「平常大約每 N 天」，其他只講事實天數
+  //   沉睡客：好久不見，不催單
+  // 只引用訂單裡有的事實（服務類型、天數），不寫資料沒有的優惠或服務
   reorder(c, _o, cfg, stats) {
     const hello = `${nameOf(c)} 您好，這裡是${cfg.shopName} 😊`;
-    const reply = '直接回覆這則訊息就可以，我們會幫您安排！';
-    if (!stats?.orderCount) return `${hello}\n距離上次訂購已經一段時間了，商品還夠用嗎？需要再幫您安排一份嗎？${reply}`;
-    const items = parseItems(stats.lastItems).join('、');
-    const what = items ? `的${items}` : '的商品';
+    const reply = '直接回覆這則訊息，就能幫您安排！';
+    const days = stats?.daysSinceLastOrder;
+    if (!stats?.orderCount || !(days > 0)) return `${hello}\n謝謝您的支持！之後有出國、出遊或其他用車的需要，${reply}`;
+    const type = stats.lastOrder?.service_type;
+    const service = SERVICE_TYPES[type] || parseItems(stats.lastItems).join('、') || '用車';
     if (stats.segment === 'dormant') {
       return [
         `${nameOf(c)} 您好，好久不見，這裡是${cfg.shopName} 💛`,
-        `距離您上次訂購${what}已經 ${stats.daysSinceLastOrder} 天了，最近還好嗎？`,
-        '如果還有需要，或想看看其他商品，隨時回覆這則訊息，我們都在這裡！',
+        `距離您上次的${service}已經 ${days} 天了，最近還好嗎？`,
+        '之後有出國、出遊或其他用車的需要，隨時回覆這則訊息，我們都在這裡！',
       ].join('\n');
     }
     if (stats.segment === 'first') {
-      return [
-        hello,
-        `謝謝您第一次選擇我們！您 ${stats.daysSinceLastOrder} 天前訂購${what}，用起來還順手嗎？有任何感想都歡迎告訴我們。`,
-        `如果快用完了，可以幫您再準備一份；也想試試其他商品的話，跟我們說說您的需求就好。`,
-        reply,
-      ].join('\n');
+      const [thanks, how, next] = FIRST_TIME[type] || ['謝謝您第一次選擇我們！', `的${service}還順利嗎？有任何建議都歡迎告訴我們。`, '下次需要用車，也可以交給我們。'];
+      return [hello, `${thanks}${days} 天前${how}`, `${next}${reply}`].join('\n');
     }
     const timing = stats.cycle?.source?.startsWith('依')
-      ? `您平常大約每 ${stats.cycle.days} 天補貨一次，上次訂購${what}到現在 ${stats.daysSinceLastOrder} 天，應該差不多要用完了吧？`
-      : `距離上次訂購${what}已經 ${stats.daysSinceLastOrder} 天了，還夠用嗎？`;
-    return [hello, `謝謝您一直以來的支持！${timing}`, '需要的話可以幫您安排同樣的內容，想換換其他商品也沒問題。', reply].join('\n');
+      ? `您平常大約每 ${stats.cycle.days} 天會找我們一次，距離上次的${service}已經 ${days} 天了`
+      : `距離上次的${service}已經 ${days} 天了`;
+    return [hello, `謝謝您一直以來的支持！${timing}，最近有出國或出遊的計畫嗎？`, `需要用車的話，可以早點幫您安排。${reply}`].join('\n');
+  },
+  // 行程確認：用車前一天傳給客戶，列出時間、航班、地點，請客戶有異動就回覆
+  trip(c, o, cfg, { today: t } = {}) {
+    if (!o) return '';
+    const type = SERVICE_TYPES[o.service_type] || '用車';
+    const date = o.service_date ? shortDate(o.service_date) : '';
+    const rel = o.service_date && t ? RELATIVE_DAYS[diffDays(o.service_date, t)] : '';
+    const when = [date, o.service_time].filter(Boolean).join(' ');
+    const head = `提醒您${[rel, date].filter(Boolean).join(' ')}的${type}行程（訂單 #${o.id}）：`;
+    const lines = o.service_type === 'rental'
+      ? [
+        when || o.pickup ? `🚗 取車：${[when, o.pickup].filter(Boolean).join('｜')}` : '',
+        o.return_date || o.dropoff ? `🔑 還車：${[o.return_date ? shortDate(o.return_date) : '', o.dropoff].filter(Boolean).join('｜')}` : '',
+        o.items ? `🚙 車型：${o.items}` : '',
+        '取車時請攜帶駕照與身分證件。',
+      ]
+      : [
+        when ? `🕐 時間：${when}` : '',
+        o.flight_no ? `✈️ 航班：${o.flight_no}` : '',
+        o.pickup ? `📍 上車地點：${o.pickup}` : '',
+        o.dropoff ? `🏁 目的地：${o.dropoff}` : '',
+        o.return_date && o.return_date !== o.service_date ? `📅 行程到 ${shortDate(o.return_date)}` : '',
+        o.items ? `🚐 ${o.items}` : '',
+      ];
+    return [
+      `${nameOf(c)} 您好，這裡是${cfg.shopName} 😊`,
+      head,
+      ...lines.filter(Boolean),
+      `${o.service_type === 'airport' ? '航班、' : ''}時間或地點有異動的話，請直接回覆這則訊息告訴我們，謝謝！`,
+    ].join('\n');
   },
   care(c, _o, cfg) {
-    return `${nameOf(c)} 您好，謝謝您加入${cfg.shopName}的好友 💛\n有任何想了解的商品或問題，直接在這裡留言，我們會很快回覆您！`;
+    return `${nameOf(c)} 您好，謝謝您加入${cfg.shopName}的好友 💛\n想詢問報價、預約行程或有任何問題，直接在這裡留言，我們會很快回覆您！`;
   },
   birthday(c, _o, cfg) {
     return `${nameOf(c)} 生日快樂 🎂\n${cfg.shopName}祝您今天開開心心！感謝一直以來的支持，有需要隨時找我們喔 💛`;
@@ -76,7 +115,7 @@ export class ReminderService {
     if (!c) throw new Error('找不到客戶');
     const order = orderId ? this.store.getOrder(orderId) : null;
     const { line, info } = this.context(c);
-    const body = text?.trim() || templates[kind]?.(c, order, info, this.stats(c, kind));
+    const body = text?.trim() || templates[kind]?.(c, order, info, this.extras(c, kind));
     if (!body) throw new Error('訊息內容為空');
     if (!c.line_user_id || !c.is_friend) {
       const error = '此客戶不是 LINE 好友，無法推播';
@@ -97,11 +136,12 @@ export class ReminderService {
   preview({ customerId, kind, orderId = null }) {
     const c = this.store.getCustomer(customerId);
     const order = orderId ? this.store.getOrder(orderId) : null;
-    return templates[kind]?.(c, order, this.context(c).info, this.stats(c, kind)) ?? '';
+    return templates[kind]?.(c, order, this.context(c).info, this.extras(c, kind)) ?? '';
   }
 
-  // 回購提醒需要消費統計（上次品項、距今天數、分群）
-  stats(customer, kind) {
+  // 範本需要的額外資料：回訪邀請要消費統計（上次服務、距今天數、分群）；行程確認要今天日期（算「明天」）
+  extras(customer, kind) {
+    if (kind === 'trip') return { today: today(this.config.tz) };
     if (kind !== 'reorder' || !customer) return null;
     return customerStats(customer, this.store.listOrders({ customerId: customer.id }), this.config);
   }
@@ -142,6 +182,27 @@ export class ReminderService {
     return sent;
   }
 
+  // 自動行程確認：明天用車的訂單，每筆只傳一次
+  async autoTripReminders(now = new Date()) {
+    const tomorrow = addDays(today(this.config.tz, now), 1);
+    const due = this.store.all(
+      `SELECT o.* FROM orders o JOIN customers c ON c.id = o.customer_id
+       WHERE o.service_date = ? AND o.status IN ('pending_payment', 'paid', 'shipped') AND c.is_friend = 1 AND c.line_user_id IS NOT NULL`,
+      tomorrow,
+    );
+    let sent = 0;
+    for (const o of due) {
+      if (this.store.lastReminder(o.customer_id, 'trip', o.id)) continue;
+      try {
+        await this.send({ customerId: o.customer_id, orderId: o.id, kind: 'trip', auto: true });
+        sent++;
+      } catch (e) {
+        this.logger.error(`自動行程確認失敗（訂單 #${o.id}）：${e.message}`);
+      }
+    }
+    return sent;
+  }
+
   async autoReorderReminders(focus) {
     let sent = 0;
     for (const item of focus.items) {
@@ -150,7 +211,7 @@ export class ReminderService {
         await this.send({ customerId: item.customer.id, kind: 'reorder', auto: true });
         sent++;
       } catch (e) {
-        this.logger.error(`自動回購提醒失敗（客戶 #${item.customer.id}）：${e.message}`);
+        this.logger.error(`自動回訪邀請失敗（客戶 #${item.customer.id}）：${e.message}`);
       }
     }
     return sent;
@@ -158,8 +219,9 @@ export class ReminderService {
 
   // 每日排程：自動提醒（若開啟）→ 產生關懷清單 → 推播摘要給客服
   async runDaily(now = new Date(), { baseUrl = '' } = {}) {
-    const report = { paymentSent: 0, reorderSent: 0, staffNotified: 0 };
+    const report = { paymentSent: 0, tripSent: 0, reorderSent: 0, staffNotified: 0 };
     if (this.config.autoPaymentReminder) report.paymentSent = await this.autoPaymentReminders(now);
+    if (this.config.autoTripReminder) report.tripSent = await this.autoTripReminders(now);
     let focus = buildFocusList(this.store, this.config, now);
     if (this.config.autoReorderReminder) {
       report.reorderSent = await this.autoReorderReminders(focus);
@@ -189,7 +251,7 @@ export function startScheduler({ service, store, config, logger = console, baseU
     store.setKv('daily_last_run', t);
     try {
       const r = await service.runDaily(now, { baseUrl });
-      logger.log(`[每日排程 ${t}] 關懷 ${r.focusCount} 位、自動匯款提醒 ${r.paymentSent}、回購提醒 ${r.reorderSent}、通知客服 ${r.staffNotified}`);
+      logger.log(`[每日排程 ${t}] 關懷 ${r.focusCount} 位、自動匯款提醒 ${r.paymentSent}、行程確認 ${r.tripSent}、回訪邀請 ${r.reorderSent}、通知客服 ${r.staffNotified}`);
     } catch (e) {
       logger.error(`[每日排程] 失敗：${e.message}`);
     }

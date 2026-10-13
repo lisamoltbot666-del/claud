@@ -12,7 +12,7 @@
     <select id="brand-switch" title="切換品牌"><option value="">全部品牌</option></select>
     <nav>
       <button data-tab="focus" class="active">今日關懷</button>
-      <button data-tab="repurchase">回購</button>
+      <button data-tab="repurchase">回訪</button>
       <button data-tab="customers">客戶</button>
       <button data-tab="orders">訂單</button>
       <button data-tab="brands">品牌</button>
@@ -33,9 +33,9 @@
 
     <section id="tab-repurchase" hidden>
       <div class="toolbar">
-        <h2>回購追蹤</h2>
+        <h2>回訪追蹤</h2>
         <div class="seg" id="repurchase-filter">
-          <button data-filter="due" class="active">該回購了</button>
+          <button data-filter="due" class="active">可邀請了</button>
           <button data-filter="soon">7 天內</button>
           <button data-filter="dormant">沉睡客</button>
           <button data-filter="all">全部</button>
@@ -59,9 +59,10 @@
 
     <section id="tab-orders" hidden>
       <div class="toolbar">
+        <select id="order-when"><option value="upcoming">即將用車（7 天內）</option><option value="">全部訂單</option></select>
         <select id="order-status"><option value="">全部狀態</option></select>
         <span class="spacer"></span>
-        <a class="button secondary" id="export-orders" href="/api/export/orders.csv">匯出消費紀錄 CSV</a>
+        <a class="button secondary" id="export-orders" href="/api/export/orders.csv">匯出訂單 CSV</a>
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
     </section>

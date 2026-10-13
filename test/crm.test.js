@@ -28,7 +28,7 @@ function fakeLine() {
 const B = 1; // 測試用的第一個品牌 id
 
 function setup(env = {}) {
-  const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw', ...env });
+  const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw', DEFAULT_REORDER_DAYS: '30', ...env });
   const store = openDb(':memory:');
   store.createBrand({ slug: 'shop', name: '測試店', channel_secret: 'sec', channel_access_token: 'tok', bank_info: '000-123' });
   const line = fakeLine();
@@ -65,7 +65,7 @@ test('關懷清單：逾期、今天到期、明天到期、回報匯款', () =>
   assert.equal(focus.items.at(-1).customer.id, c.id, '優先度低的排後面');
 });
 
-test('關懷清單：該回購了、提醒後冷卻、延後', () => {
+test('關懷清單：可邀請再次預約、邀請後一個週期內不再列入、延後', () => {
   const { config, store } = setup();
   const c = store.upsertLineCustomer(B, 'R', { displayName: 'R' });
   store.createOrder(c.id, { order_date: addDays(T, -60), status: 'completed', amount: 500 });
@@ -74,6 +74,10 @@ test('關懷清單：該回購了、提醒後冷卻、延後', () => {
 
   store.logReminder({ customerId: c.id, kind: 'reorder', text: 'x' });
   assert.ok(!reasonsOf(buildFocusList(store, config), c.id).includes('reorder'), '剛提醒過不再列入');
+  store.run("UPDATE reminders SET sent_at = ? WHERE customer_id = ?", `${addDays(T, -10)}T04:00:00.000Z`, c.id);
+  assert.ok(!reasonsOf(buildFocusList(store, config), c.id).includes('reorder'), '10 天前邀請過，週期 20 天內仍不列入');
+  store.run("UPDATE reminders SET sent_at = ? WHERE customer_id = ?", `${addDays(T, -21)}T04:00:00.000Z`, c.id);
+  assert.ok(reasonsOf(buildFocusList(store, config), c.id).includes('reorder'), '超過一個週期再列入');
 
   const c2 = store.upsertLineCustomer(B, 'R2', { displayName: 'R2' });
   store.createOrder(c2.id, { order_date: addDays(T, -45), status: 'completed', amount: 500 });
@@ -113,7 +117,7 @@ test('Webhook：加好友自動建檔、封鎖、匯款回報、查訂單', asyn
   assert.ok(!c.last_handled_at, '自動回覆不算客服已處理');
 
   await wh.handle(brand, { events: [{ type: 'message', source: src, replyToken: 'r2', message: { type: 'text', text: '查訂單' } }] });
-  assert.match(line.replies[1].text, /NT\$880｜待匯款/);
+  assert.match(line.replies[1].text, /NT\$880｜待付款/);
   assert.equal(store.listMessages(c.id).length, 4);
 
   await wh.handle(brand, { events: [{ type: 'unfollow', source: src }] });
@@ -200,30 +204,83 @@ test('HTTP：後台需登入、webhook 驗簽、API 流程', async (t) => {
   assert.match(csv, /"'=HYPERLINK\(""x""\)"/);
 });
 
-test('回購提醒文字依分群：首購、回購（依平均週期）、沉睡', () => {
+test('回訪邀請依分群與服務類型：首次機場接送、回頭客（依平均週期）、沉睡、尚未用車', () => {
   const { config, store, lines } = setup();
   const svc = new ReminderService({ store, lines, config, logger: silent });
 
-  const first = store.upsertLineCustomer(B, 'F1', { displayName: '首購' });
-  store.createOrder(first.id, { order_date: addDays(T, -35), status: 'completed', amount: 800, items: '滴雞精 x10' });
+  const first = store.upsertLineCustomer(B, 'F1', { displayName: '首次' });
+  store.createOrder(first.id, { order_date: addDays(T, -40), service_date: addDays(T, -35), service_type: 'airport', status: 'completed', amount: 1200 });
   const f = svc.preview({ customerId: first.id, kind: 'reorder' });
-  assert.match(f, /第一次選擇/);
-  assert.match(f, /35 天前訂購的滴雞精/);
-  assert.doesNotMatch(f, /x10/);
+  assert.match(f, /第一次搭乘我們的機場接送！35 天前的行程還順利嗎/, '以用車日計算天數');
+  assert.match(f, /下次出國或回國需要接送/);
 
   const rep = store.upsertLineCustomer(B, 'R1', { displayName: '老客' });
-  store.createOrder(rep.id, { order_date: addDays(T, -50), status: 'completed', amount: 800, items: '豆漿' });
-  store.createOrder(rep.id, { order_date: addDays(T, -25), status: 'completed', amount: 800, items: '豆漿、禮盒' });
+  store.createOrder(rep.id, { order_date: addDays(T, -50), status: 'completed', amount: 3000, service_type: 'charter' });
+  store.createOrder(rep.id, { order_date: addDays(T, -25), status: 'completed', amount: 3000, service_type: 'charter' });
   const r = svc.preview({ customerId: rep.id, kind: 'reorder' });
-  assert.match(r, /每 25 天補貨一次/);
-  assert.match(r, /豆漿、禮盒/);
+  assert.match(r, /每 25 天會找我們一次，距離上次的包車已經 25 天了/);
 
   const sleep = store.upsertLineCustomer(B, 'D1', { displayName: '沉睡' });
-  store.createOrder(sleep.id, { order_date: addDays(T, -120), status: 'completed', amount: 800, items: '禮盒' });
+  store.createOrder(sleep.id, { order_date: addDays(T, -120), status: 'completed', amount: 2000, service_type: 'rental' });
   const d = svc.preview({ customerId: sleep.id, kind: 'reorder' });
   assert.match(d, /好久不見/);
-  assert.doesNotMatch(d, /用完/);
+  assert.match(d, /上次的租車自駕已經 120 天/);
 
-  const none = store.upsertLineCustomer(B, 'N1', { displayName: '新客' });
-  assert.match(svc.preview({ customerId: none.id, kind: 'reorder' }), /測試店/);
+  const upcoming = store.upsertLineCustomer(B, 'U1', { displayName: '預約中' });
+  store.createOrder(upcoming.id, { order_date: T, service_date: addDays(T, 10), status: 'paid', amount: 1200 });
+  const u = svc.preview({ customerId: upcoming.id, kind: 'reorder' });
+  assert.doesNotMatch(u, /天前|-\d/, '行程還沒到，不寫天數');
+});
+
+test('行程確認：範本、明天用車列入清單、自動推播一次、今天未派車', async () => {
+  const { config, store, line, lines } = setup({ AUTO_TRIP_REMINDER: 'true' });
+  const svc = new ReminderService({ store, lines, config, logger: silent });
+  const c = store.upsertLineCustomer(B, 'T1', { displayName: '小美' });
+  const tomorrow = addDays(T, 1);
+  const o = store.createOrder(c.id, {
+    order_date: T, service_date: tomorrow, service_time: '05:30', service_type: 'airport', status: 'paid', amount: 1200,
+    flight_no: 'BR198', pickup: '台北市信義區松仁路 100 號', dropoff: '桃園機場第二航廈', items: '7 人座',
+  });
+
+  const text = svc.preview({ customerId: c.id, kind: 'trip', orderId: o.id });
+  assert.match(text, /提醒您明天 \d+\/\d+（.）的機場接送行程（訂單 #\d+）/);
+  assert.match(text, /05:30/);
+  assert.match(text, /航班：BR198/);
+  assert.match(text, /上車地點：台北市信義區/);
+  assert.match(text, /目的地：桃園機場第二航廈/);
+  assert.match(text, /航班、時間或地點有異動/);
+
+  assert.ok(reasonsOf(buildFocusList(store, config), c.id).includes('trip_tomorrow'));
+  const report = await svc.runDaily();
+  assert.equal(report.tripSent, 1);
+  assert.match(line.pushes[0].text, /BR198/);
+  assert.ok(!reasonsOf(buildFocusList(store, config), c.id).includes('trip_tomorrow'), '傳過就不再列入');
+  assert.equal(await svc.autoTripReminders(), 0, '同一筆不重複傳');
+
+  const rental = store.createOrder(c.id, { order_date: T, service_date: T, service_time: '10:00', service_type: 'rental', status: 'paid', amount: 4000, pickup: '高鐵左營站', return_date: addDays(T, 3), dropoff: '高鐵左營站' });
+  const rt = svc.preview({ customerId: c.id, kind: 'trip', orderId: rental.id });
+  assert.match(rt, /今天 .*租車自駕/);
+  assert.match(rt, /取車：.*10:00｜高鐵左營站/);
+  assert.match(rt, /還車：/);
+  assert.match(rt, /駕照/);
+  assert.ok(reasonsOf(buildFocusList(store, config), c.id).includes('dispatch'), '今天用車未派車');
+  store.updateOrder(rental.id, { status: 'shipped' });
+  assert.ok(!reasonsOf(buildFocusList(store, config), c.id).includes('dispatch'));
+});
+
+test('新訂單匯款期限：最晚在用車前一天', async () => {
+  const { config, store, lines } = setup();
+  const app = createApp({ store, lines, config, logger: silent });
+  const server = http.createServer(app).listen(0);
+  const auth = { Authorization: `Basic ${Buffer.from('admin:pw').toString('base64')}`, 'Content-Type': 'application/json' };
+  const c = store.upsertLineCustomer(B, 'P1', { displayName: 'P' });
+  const post = async (body) => (await fetch(`http://localhost:${server.address().port}/api/orders`, { method: 'POST', headers: auth, body: JSON.stringify({ customer_id: c.id, amount: 1000, ...body }) })).json();
+  try {
+    assert.equal((await post({ service_date: addDays(T, 30) })).payment_due_date, addDays(T, 3));
+    assert.equal((await post({ service_date: addDays(T, 2) })).payment_due_date, addDays(T, 1));
+    assert.equal((await post({ service_date: T })).payment_due_date, T);
+    assert.match((await post({ service_type: 'boat' })).error, /未知的服務類型/);
+  } finally {
+    server.close();
+  }
 });

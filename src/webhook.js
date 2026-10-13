@@ -1,4 +1,4 @@
-import { ORDER_STATUSES } from './db.js';
+import { ORDER_STATUSES, SERVICE_TYPES } from './db.js';
 
 const PAID_PATTERN = /(已|有)?(匯款|轉帳|付款)(完成|好了|了)|已(匯|轉|付)/;
 const QUERY_PATTERN = /^(查訂單|訂單查詢|我的訂單|查詢訂單)$/;
@@ -79,7 +79,7 @@ export class WebhookHandler {
     if (msg.type === 'text' && QUERY_PATTERN.test(msg.text.trim())) {
       const orders = this.store.listOrders({ customerId: customer.id }).slice(0, 5);
       const lines = orders.length
-        ? orders.map((o) => `#${o.id} ${o.order_date} NT$${o.amount}｜${ORDER_STATUSES[o.status]}`)
+        ? orders.map((o) => `#${o.id} ${[o.service_date || o.order_date, o.service_time, SERVICE_TYPES[o.service_type]].filter(Boolean).join(' ')} NT$${o.amount}｜${ORDER_STATUSES[o.status]}`)
         : ['目前查不到您的訂單紀錄喔！'];
       await this.reply(ctx, event, customer, ['您最近的訂單：', ...lines].join('\n'));
       return;
