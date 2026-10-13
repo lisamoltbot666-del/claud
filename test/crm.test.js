@@ -25,11 +25,15 @@ function fakeLine() {
   };
 }
 
+const B = 1; // 測試用的第一個品牌 id
+
 function setup(env = {}) {
-  const config = getConfig({ TZ_NAME: 'Asia/Taipei', SHOP_NAME: '測試店', BANK_INFO: '000-123', ADMIN_PASSWORD: 'pw', LINE_CHANNEL_SECRET: 'sec', ...env });
+  const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw', ...env });
   const store = openDb(':memory:');
+  store.createBrand({ slug: 'shop', name: '測試店', channel_secret: 'sec', channel_access_token: 'tok', bank_info: '000-123' });
   const line = fakeLine();
-  return { config, store, line };
+  const lines = { for: () => line };
+  return { config, store, line, lines };
 }
 
 const T = today('Asia/Taipei');
@@ -43,10 +47,10 @@ test('reorderCycle：手動 > 平均間隔 > 預設', () => {
 
 test('關懷清單：逾期、今天到期、明天到期、回報匯款', () => {
   const { config, store } = setup();
-  const a = store.upsertLineCustomer('A', { displayName: 'A' });
-  const b = store.upsertLineCustomer('B', { displayName: 'B' });
-  const c = store.upsertLineCustomer('C', { displayName: 'C' });
-  const d = store.upsertLineCustomer('D', { displayName: 'D' });
+  const a = store.upsertLineCustomer(B, 'A', { displayName: 'A' });
+  const b = store.upsertLineCustomer(B, 'B', { displayName: 'B' });
+  const c = store.upsertLineCustomer(B, 'C', { displayName: 'C' });
+  const d = store.upsertLineCustomer(B, 'D', { displayName: 'D' });
   store.createOrder(a.id, { order_date: addDays(T, -5), payment_due_date: addDays(T, -2), amount: 100 });
   store.createOrder(b.id, { order_date: T, payment_due_date: T, amount: 100 });
   store.createOrder(c.id, { order_date: T, payment_due_date: addDays(T, 1), amount: 100 });
@@ -63,7 +67,7 @@ test('關懷清單：逾期、今天到期、明天到期、回報匯款', () =>
 
 test('關懷清單：該回購了、提醒後冷卻、延後', () => {
   const { config, store } = setup();
-  const c = store.upsertLineCustomer('R', { displayName: 'R' });
+  const c = store.upsertLineCustomer(B, 'R', { displayName: 'R' });
   store.createOrder(c.id, { order_date: addDays(T, -60), status: 'completed', amount: 500 });
   store.createOrder(c.id, { order_date: addDays(T, -40), status: 'completed', amount: 500 });
   assert.ok(reasonsOf(buildFocusList(store, config), c.id).includes('reorder'));
@@ -71,7 +75,7 @@ test('關懷清單：該回購了、提醒後冷卻、延後', () => {
   store.logReminder({ customerId: c.id, kind: 'reorder', text: 'x' });
   assert.ok(!reasonsOf(buildFocusList(store, config), c.id).includes('reorder'), '剛提醒過不再列入');
 
-  const c2 = store.upsertLineCustomer('R2', { displayName: 'R2' });
+  const c2 = store.upsertLineCustomer(B, 'R2', { displayName: 'R2' });
   store.createOrder(c2.id, { order_date: addDays(T, -45), status: 'completed', amount: 500 });
   store.updateCustomer(c2.id, { next_contact_date: addDays(T, 3) });
   assert.deepEqual(reasonsOf(buildFocusList(store, config), c2.id), [], '延後期間不列入');
@@ -82,7 +86,7 @@ test('關懷清單：該回購了、提醒後冷卻、延後', () => {
 
 test('關懷清單：新好友未下單、未回覆訊息', () => {
   const { config, store } = setup();
-  const c = store.upsertLineCustomer('N', { displayName: 'N' });
+  const c = store.upsertLineCustomer(B, 'N', { displayName: 'N' });
   assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['new_friend']);
   store.addMessage(c.id, 'in', '請問有貨嗎');
   assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['unreplied', 'new_friend']);
@@ -91,34 +95,35 @@ test('關懷清單：新好友未下單、未回覆訊息', () => {
 });
 
 test('Webhook：加好友自動建檔、封鎖、匯款回報、查訂單', async () => {
-  const { store, line } = setup();
-  const wh = new WebhookHandler({ store, line, logger: silent });
+  const { store, line, lines } = setup();
+  const wh = new WebhookHandler({ store, lines, logger: silent });
+  const brand = store.getBrand(B);
   const src = { type: 'user', userId: 'U1' };
 
-  await wh.handle({ events: [{ type: 'follow', source: src, replyToken: 'r0' }] });
-  let c = store.getCustomerByLineId('U1');
+  await wh.handle(brand, { events: [{ type: 'follow', source: src, replyToken: 'r0' }] });
+  let c = store.getCustomerByLineId(B, 'U1');
   assert.equal(c.display_name, '名-U1');
   assert.equal(c.is_friend, 1);
 
   const o = store.createOrder(c.id, { order_date: T, payment_due_date: T, amount: 880 });
-  await wh.handle({ events: [{ type: 'message', source: src, replyToken: 'r1', message: { type: 'text', text: '我已匯款，末五碼 54321' } }] });
+  await wh.handle(brand, { events: [{ type: 'message', source: src, replyToken: 'r1', message: { type: 'text', text: '我已匯款，末五碼 54321' } }] });
   assert.match(store.getOrder(o.id).payment_report, /54321/);
   assert.match(line.replies[0].text, /收到您的匯款通知/);
-  c = store.getCustomerByLineId('U1');
+  c = store.getCustomerByLineId(B, 'U1');
   assert.ok(!c.last_handled_at, '自動回覆不算客服已處理');
 
-  await wh.handle({ events: [{ type: 'message', source: src, replyToken: 'r2', message: { type: 'text', text: '查訂單' } }] });
+  await wh.handle(brand, { events: [{ type: 'message', source: src, replyToken: 'r2', message: { type: 'text', text: '查訂單' } }] });
   assert.match(line.replies[1].text, /NT\$880｜待匯款/);
   assert.equal(store.listMessages(c.id).length, 4);
 
-  await wh.handle({ events: [{ type: 'unfollow', source: src }] });
-  assert.equal(store.getCustomerByLineId('U1').is_friend, 0);
+  await wh.handle(brand, { events: [{ type: 'unfollow', source: src }] });
+  assert.equal(store.getCustomerByLineId(B, 'U1').is_friend, 0);
 });
 
 test('提醒：推播、非好友失敗、自動匯款提醒一天一次、每日摘要推給客服', async () => {
-  const { config, store, line } = setup({ AUTO_PAYMENT_REMINDER: 'true', STAFF_LINE_USER_IDS: 'STAFF1' });
-  const svc = new ReminderService({ store, line, config, logger: silent });
-  const c = store.upsertLineCustomer('P', { displayName: '小美' });
+  const { config, store, line, lines } = setup({ AUTO_PAYMENT_REMINDER: 'true', STAFF_LINE_USER_IDS: 'STAFF1' });
+  const svc = new ReminderService({ store, lines, config, logger: silent });
+  const c = store.upsertLineCustomer(B, 'P', { displayName: '小美' });
   const o = store.createOrder(c.id, { order_date: T, payment_due_date: T, amount: 1200, items: '滴雞精' });
 
   const preview = svc.preview({ customerId: c.id, kind: 'payment', orderId: o.id });
@@ -126,7 +131,7 @@ test('提醒：推播、非好友失敗、自動匯款提醒一天一次、每�
   assert.match(preview, /NT\$1200/);
   assert.match(preview, /000-123/);
 
-  const manual = store.createCustomer({ display_name: '電話客' });
+  const manual = store.createCustomer(B, { display_name: '電話客' });
   await assert.rejects(svc.send({ customerId: manual.id, kind: 'care' }), /不是 LINE 好友/);
 
   const report = await svc.runDaily();
@@ -137,7 +142,7 @@ test('提醒：推播、非好友失敗、自動匯款提醒一天一次、每�
 });
 
 test('摘要格式', () => {
-  assert.match(formatFocusSummary({ date: T, items: [] }, { shopName: 'X' }), /沒有需要特別關心/);
+  assert.match(formatFocusSummary({ date: T, items: [] }), /沒有需要特別關心/);
 });
 
 test('簽章驗證', () => {
@@ -149,8 +154,8 @@ test('簽章驗證', () => {
 });
 
 test('HTTP：後台需登入、webhook 驗簽、API 流程', async (t) => {
-  const { config, store, line } = setup();
-  const server = http.createServer(createApp({ store, line, config, logger: silent }));
+  const { config, store, line, lines } = setup();
+  const server = http.createServer(createApp({ store, lines, config, logger: silent }));
   await new Promise((r) => server.listen(0, r));
   t.after(() => server.close());
   const base = `http://localhost:${server.address().port}`;
@@ -165,7 +170,8 @@ test('HTTP：後台需登入、webhook 驗簽、API 流程', async (t) => {
 
   const payload = JSON.stringify({ events: [{ type: 'message', source: { type: 'user', userId: 'U7' }, replyToken: 'r', message: { type: 'text', text: '哈囉' } }] });
   const sig = crypto.createHmac('sha256', 'sec').update(payload).digest('base64');
-  assert.equal((await fetch(`${base}/webhook`, { method: 'POST', body: payload, headers: { 'x-line-signature': sig } })).status, 200);
+  assert.equal((await fetch(`${base}/webhook/nope`, { method: 'POST', body: payload, headers: { 'x-line-signature': sig } })).status, 404);
+  assert.equal((await fetch(`${base}/webhook/shop`, { method: 'POST', body: payload, headers: { 'x-line-signature': sig } })).status, 200);
   await new Promise((r) => setTimeout(r, 50));
 
   const customers = (await call('/api/customers')).data;
@@ -186,7 +192,7 @@ test('HTTP：後台需登入、webhook 驗簽、API 流程', async (t) => {
 
   assert.equal((await call(`/api/orders/${order.id}`, { method: 'PATCH', body: { status: 'nope' } })).status, 400);
 
-  const sync = (await call('/api/sync-followers', { method: 'POST' })).data;
+  const sync = (await call(`/api/brands/${B}/sync-followers`, { method: 'POST' })).data;
   assert.deepEqual(sync, { total: 2, added: 2 });
 
   store.updateCustomer(id, { note: '=HYPERLINK("x")' });

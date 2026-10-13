@@ -26,9 +26,19 @@ export const templates = {
   },
 };
 
+// 訊息範本用的品牌資訊：店名、匯款帳號都依客戶所屬品牌
+export function brandInfo(brand, config) {
+  return { shopName: brand?.name || config.shopName, bankInfo: brand?.bank_info || '' };
+}
+
 export class ReminderService {
-  constructor({ store, line, config, logger = console }) {
-    Object.assign(this, { store, line, config, logger });
+  constructor({ store, lines, config, logger = console }) {
+    Object.assign(this, { store, lines, config, logger });
+  }
+
+  context(customer) {
+    const brand = this.store.getBrand(customer.brand_id);
+    return { brand, line: this.lines.for(brand), info: brandInfo(brand, this.config) };
   }
 
   // 推播訊息給客戶並記錄
@@ -36,7 +46,8 @@ export class ReminderService {
     const c = this.store.getCustomer(customerId);
     if (!c) throw new Error('找不到客戶');
     const order = orderId ? this.store.getOrder(orderId) : null;
-    const body = text?.trim() || templates[kind]?.(c, order, this.config);
+    const { line, info } = this.context(c);
+    const body = text?.trim() || templates[kind]?.(c, order, info);
     if (!body) throw new Error('訊息內容為空');
     if (!c.line_user_id || !c.is_friend) {
       const error = '此客戶不是 LINE 好友，無法推播';
@@ -44,7 +55,7 @@ export class ReminderService {
       throw new Error(error);
     }
     try {
-      await this.line.push(c.line_user_id, body);
+      await line.push(c.line_user_id, body);
     } catch (e) {
       this.store.logReminder({ customerId, orderId, kind, text: body, ok: false, error: e.message, auto });
       throw e;
@@ -57,7 +68,19 @@ export class ReminderService {
   preview({ customerId, kind, orderId = null }) {
     const c = this.store.getCustomer(customerId);
     const order = orderId ? this.store.getOrder(orderId) : null;
-    return templates[kind]?.(c, order, this.config) ?? '';
+    return templates[kind]?.(c, order, this.context(c).info) ?? '';
+  }
+
+  // 每日清單推給客服：設定為客服的客戶用其所屬品牌的帳號推播；STAFF_LINE_USER_IDS 則用第一個品牌
+  staffTargets() {
+    const targets = [];
+    for (const id of this.store.staffIds()) {
+      const c = this.store.getCustomer(id);
+      if (c?.line_user_id && c.is_friend) targets.push({ to: c.line_user_id, line: this.context(c).line });
+    }
+    const first = this.store.listBrands()[0];
+    for (const uid of this.config.staffUserIds) if (first) targets.push({ to: uid, line: this.lines.for(first) });
+    return targets;
   }
 
   // 自動提醒：明天到期 / 今天到期 / 已逾期的未匯款訂單，每天每筆最多一次、總共最多 3 次
@@ -107,10 +130,10 @@ export class ReminderService {
       report.reorderSent = await this.autoReorderReminders(focus);
       if (report.reorderSent) focus = buildFocusList(this.store, this.config, now);
     }
-    const summary = formatFocusSummary(focus, { shopName: this.config.shopName, baseUrl });
-    for (const staff of this.config.staffUserIds) {
+    const summary = formatFocusSummary(focus, { brands: this.store.listBrands(), baseUrl });
+    for (const { to, line } of this.staffTargets()) {
       try {
-        await this.line.push(staff, summary);
+        await line.push(to, summary);
         report.staffNotified++;
       } catch (e) {
         this.logger.error(`推播關懷清單給客服失敗：${e.message}`);

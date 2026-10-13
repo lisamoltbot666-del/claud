@@ -2,10 +2,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS customers (
+// 每個品牌 = 一個 LINE 官方帳號（Messaging API channel）
+const BRANDS_TABLE = `
+CREATE TABLE IF NOT EXISTS brands (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  line_user_id TEXT UNIQUE,
+  slug TEXT NOT NULL UNIQUE,     -- 網址代號，Webhook 為 /webhook/<slug>
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#06c755',
+  channel_secret TEXT,
+  channel_access_token TEXT,
+  bank_info TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+`;
+
+const customersTable = (name) => `
+CREATE TABLE IF NOT EXISTS ${name} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER NOT NULL REFERENCES brands(id),
+  line_user_id TEXT,             -- 同一個人在不同品牌的官方帳號會有不同 userId
   display_name TEXT,
   picture_url TEXT,
   status_message TEXT,
@@ -27,7 +42,9 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+`;
 
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -44,6 +61,7 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_line ON customers(brand_id, line_user_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 
@@ -85,6 +103,7 @@ export const ORDER_STATUSES = {
 };
 
 const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
+const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info'];
 const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note'];
 
 const nowIso = () => new Date().toISOString();
@@ -94,11 +113,39 @@ export function openDb(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  db.exec(BRANDS_TABLE);
+  migrateLegacyCustomers(db);
+  db.exec(customersTable('customers'));
   db.exec(SCHEMA);
-  // 舊版資料庫補上新欄位
-  const cols = new Set(db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name));
-  for (const col of ['email', 'birthday', 'gender']) if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
   return new Store(db);
+}
+
+// 舊版（單一品牌）資料庫：客戶表沒有 brand_id，重建客戶表並把所有客戶歸到「預設品牌」
+function migrateLegacyCustomers(db) {
+  const cols = db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name);
+  if (!cols.length || cols.includes('brand_id')) return;
+  for (const col of ['email', 'birthday', 'gender']) if (!cols.includes(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
+  db.exec("INSERT OR IGNORE INTO brands (slug, name) VALUES ('default', '預設品牌')");
+  const brandId = db.prepare("SELECT id FROM brands WHERE slug = 'default'").get().id;
+  const copy = db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name).join(', ');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN');
+    db.exec(customersTable('customers_new'));
+    db.prepare(`INSERT INTO customers_new (${copy}, brand_id) SELECT ${copy}, ? FROM customers`).run(brandId);
+    db.exec('DROP TABLE customers; ALTER TABLE customers_new RENAME TO customers;');
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+export function slugify(text) {
+  const slug = String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return slug || `brand-${Date.now().toString(36)}`;
 }
 
 export class Store {
@@ -118,18 +165,57 @@ export class Store {
     return this.db.prepare(sql).run(...params);
   }
 
+  // ---------- brands ----------
+  listBrands() {
+    return this.all('SELECT * FROM brands ORDER BY id');
+  }
+
+  getBrand(id) {
+    return this.get('SELECT * FROM brands WHERE id = ?', id);
+  }
+
+  getBrandBySlug(slug) {
+    return this.get('SELECT * FROM brands WHERE slug = ?', slug);
+  }
+
+  createBrand(fields) {
+    const slug = slugify(fields.slug || fields.name);
+    if (this.getBrandBySlug(slug)) throw new Error(`代號「${slug}」已被使用`);
+    const r = this.run('INSERT INTO brands (slug, name) VALUES (?, ?)', slug, fields.name || slug);
+    return this.updateBrand(Number(r.lastInsertRowid), { ...fields, slug });
+  }
+
+  updateBrand(id, fields) {
+    if ('slug' in fields) {
+      fields = { ...fields, slug: slugify(fields.slug) };
+      const other = this.getBrandBySlug(fields.slug);
+      if (other && other.id !== id) throw new Error(`代號「${fields.slug}」已被使用`);
+    }
+    if ('name' in fields && !String(fields.name).trim()) throw new Error('請輸入品牌名稱');
+    if (fields.color && !/^#[0-9a-f]{6}$/i.test(fields.color)) throw new Error('顏色格式需為 #RRGGBB');
+    const keys = BRAND_EDITABLE.filter((k) => k in fields);
+    if (keys.length) this.run(`UPDATE brands SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => (fields[k] === '' ? null : fields[k])), id);
+    return this.getBrand(id);
+  }
+
+  deleteBrand(id) {
+    const n = this.get('SELECT COUNT(*) AS n FROM customers WHERE brand_id = ?', id).n;
+    if (n) throw new Error(`此品牌還有 ${n} 位客戶，無法刪除`);
+    this.run('DELETE FROM brands WHERE id = ?', id);
+  }
+
   // ---------- customers ----------
   getCustomer(id) {
     return this.get('SELECT * FROM customers WHERE id = ?', id);
   }
 
-  getCustomerByLineId(lineUserId) {
-    return this.get('SELECT * FROM customers WHERE line_user_id = ?', lineUserId);
+  getCustomerByLineId(brandId, lineUserId) {
+    return this.get('SELECT * FROM customers WHERE brand_id = ? AND line_user_id = ?', brandId, lineUserId);
   }
 
   // 依 LINE userId 建立或更新客戶（好友加入、傳訊時呼叫）
-  upsertLineCustomer(lineUserId, profile = {}) {
-    const existing = this.getCustomerByLineId(lineUserId);
+  upsertLineCustomer(brandId, lineUserId, profile = {}) {
+    const existing = this.getCustomerByLineId(brandId, lineUserId);
     const ts = nowIso();
     if (existing) {
       this.run(
@@ -144,15 +230,16 @@ export class Store {
       return this.getCustomer(existing.id);
     }
     const r = this.run(
-      `INSERT INTO customers (line_user_id, display_name, picture_url, status_message, followed_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      lineUserId, profile.displayName ?? null, profile.pictureUrl ?? null, profile.statusMessage ?? null, ts,
+      `INSERT INTO customers (brand_id, line_user_id, display_name, picture_url, status_message, followed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      brandId, lineUserId, profile.displayName ?? null, profile.pictureUrl ?? null, profile.statusMessage ?? null, ts,
     );
     return this.getCustomer(Number(r.lastInsertRowid));
   }
 
-  createCustomer(fields) {
-    const r = this.run('INSERT INTO customers (display_name, is_friend) VALUES (?, 0)', fields.display_name || '未命名客戶');
+  createCustomer(brandId, fields) {
+    if (!this.getBrand(brandId)) throw new Error('請選擇品牌');
+    const r = this.run('INSERT INTO customers (brand_id, display_name, is_friend) VALUES (?, ?, 0)', brandId, fields.display_name || '未命名客戶');
     const id = Number(r.lastInsertRowid);
     this.updateCustomer(id, fields);
     return this.getCustomer(id);
@@ -180,9 +267,10 @@ export class Store {
     this.run('DELETE FROM customers WHERE id = ?', id);
   }
 
-  listCustomers({ q = '', tag = '' } = {}) {
+  listCustomers({ q = '', tag = '', brandId = null } = {}) {
     const where = [];
     const params = [];
+    if (brandId) { where.push('c.brand_id = ?'); params.push(brandId); }
     if (q) {
       where.push('(display_name LIKE ? OR real_name LIKE ? OR phone LIKE ? OR note LIKE ? OR line_user_id = ?)');
       params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, q);
@@ -255,13 +343,14 @@ export class Store {
     this.run('UPDATE orders SET payment_report = ?, payment_reported_at = ?, updated_at = ? WHERE id = ?', report, ts, ts, orderId);
   }
 
-  listOrders({ status = '', customerId = null } = {}) {
+  listOrders({ status = '', customerId = null, brandId = null } = {}) {
     const where = [];
     const params = [];
+    if (brandId) { where.push('c.brand_id = ?'); params.push(brandId); }
     if (status) { where.push('o.status = ?'); params.push(status); }
     if (customerId) { where.push('o.customer_id = ?'); params.push(customerId); }
     return this.all(
-      `SELECT o.*, c.display_name, c.real_name, c.line_user_id
+      `SELECT o.*, c.display_name, c.real_name, c.line_user_id, c.brand_id
        FROM orders o JOIN customers c ON c.id = o.customer_id
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY o.order_date DESC, o.id DESC`,
@@ -292,6 +381,23 @@ export class Store {
 
   listReminders(customerId) {
     return this.all('SELECT * FROM reminders WHERE customer_id = ? ORDER BY id DESC LIMIT 50', customerId);
+  }
+
+  // ---------- 客服（接收每日清單的人）----------
+  // 客服本人加各品牌官方帳號好友後，在後台把他設為客服；用該品牌的帳號推播給他
+  staffIds() {
+    try {
+      return JSON.parse(this.getKv('staff_customer_ids') || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  setStaff(customerId, isStaff) {
+    const ids = new Set(this.staffIds());
+    if (isStaff) ids.add(customerId);
+    else ids.delete(customerId);
+    this.setKv('staff_customer_ids', JSON.stringify([...ids]));
   }
 
   // ---------- kv ----------

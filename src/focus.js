@@ -18,13 +18,16 @@ export const PRIORITY_LABELS = { 1: '緊急', 2: '今日', 3: '有空時' };
 
 export { reorderCycle } from './profile.js';
 
-export function buildFocusList(store, config, now = new Date()) {
+// brandId：只看單一品牌；不給則列出全部品牌（客服帳號本身不列入）
+export function buildFocusList(store, config, now = new Date(), { brandId = null } = {}) {
   const tz = config.tz;
   const t = today(tz, now);
   const tomorrow = addDays(t, 1);
   const cooldownStart = addDays(t, -config.reminderCooldownDays);
 
-  const customers = store.all('SELECT * FROM customers');
+  const staff = new Set(store.staffIds());
+  const customers = (brandId ? store.all('SELECT * FROM customers WHERE brand_id = ?', brandId) : store.all('SELECT * FROM customers'))
+    .filter((c) => !staff.has(c.id));
   const orders = store.all("SELECT * FROM orders WHERE status != 'cancelled' ORDER BY order_date, id");
   const ordersByCustomer = new Map();
   for (const o of orders) {
@@ -100,19 +103,24 @@ export function buildFocusList(store, config, now = new Date()) {
   return { date: t, items: result };
 }
 
-// 給客服的 LINE 文字摘要
-export function formatFocusSummary(focus, { shopName = '', baseUrl = '' } = {}) {
-  if (!focus.items.length) return `【${shopName} 今日關懷清單 ${focus.date}】\n今天沒有需要特別關心的客戶 🎉`;
-  const lines = [`【${shopName} 今日關懷清單 ${focus.date}】共 ${focus.items.length} 位`];
-  for (const p of [1, 2, 3]) {
-    const group = focus.items.filter((i) => i.priority === p);
-    if (!group.length) continue;
-    lines.push('', `■ ${PRIORITY_LABELS[p]}（${group.length}）`);
-    for (const item of group) {
+const PRIORITY_ICONS = { 1: '🔴', 2: '🟠', 3: '🔵' };
+
+// 給客服的 LINE 文字摘要：依品牌分段，每段內依優先度排序
+export function formatFocusSummary(focus, { brands = [], baseUrl = '' } = {}) {
+  const title = `【今日關懷清單 ${focus.date}】`;
+  if (!focus.items.length) return `${title}\n今天沒有需要特別關心的客戶 🎉`;
+  const lines = [`${title}共 ${focus.items.length} 位`, `🔴${PRIORITY_LABELS[1]} 🟠${PRIORITY_LABELS[2]} 🔵${PRIORITY_LABELS[3]}`];
+  const known = new Set(brands.map((b) => b.id));
+  const groups = [...brands, { id: null, name: '其他' }];
+  for (const brand of groups) {
+    const items = focus.items.filter((i) => (brand.id === null ? !known.has(i.customer.brand_id) : i.customer.brand_id === brand.id));
+    if (!items.length) continue;
+    lines.push('', `━━ ${brand.name}（${items.length}）`);
+    for (const item of items) {
       const name = item.customer.real_name || item.customer.display_name || `客戶#${item.customer.id}`;
       const s = item.stats;
       const history = s?.orderCount ? `（購買 ${s.orderCount} 次，累積 NT$${s.totalSpent}${s.lastItems ? `，上次：${s.lastItems}` : ''}）` : '';
-      lines.push(`・${name}：${item.reasons.map((r) => r.label).join('、')}${history}`);
+      lines.push(`${PRIORITY_ICONS[item.priority]} ${name}：${item.reasons.map((r) => r.label).join('、')}${history}`);
     }
   }
   if (baseUrl) lines.push('', `後台：${baseUrl}`);

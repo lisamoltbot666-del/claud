@@ -15,7 +15,18 @@ const historyLine = (st) => (st?.orderCount
   ? `${SEGMENTS[st.segment]}｜購買 ${st.orderCount} 次｜累積 ${money(st.totalSpent)}｜客單價 ${money(st.avgOrder)}｜最近 ${esc(st.lastOrderDate)}${st.lastItems ? ` 買了「${esc(st.lastItems)}」` : ''}${st.topItems.length ? `｜常買：${st.topItems.map((i) => esc(i.name)).join('、')}` : ''}`
   : '尚無消費紀錄');
 let STATUSES = {};
+let BRANDS = [];
 let currentCustomerId = null;
+
+// ---------- 品牌 ----------
+const prefs = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+let currentBrand = prefs.get('brand') || '';
+const brandOf = (id) => BRANDS.find((b) => b.id === Number(id));
+const brandQs = () => (currentBrand ? `brand=${currentBrand}` : '');
+const brandTag = (id) => {
+  const b = brandOf(id);
+  return b ? `<span class="brand-tag" style="background:${esc(b.color)}">${esc(b.name)}</span>` : '';
+};
 
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -41,7 +52,7 @@ async function guard(fn) {
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 function showTab(tab) {
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['focus', 'repurchase', 'customers', 'orders']) $(`#tab-${t}`).hidden = t !== tab;
+  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'brands']) $(`#tab-${t}`).hidden = t !== tab;
   guard(LOADERS[tab]);
 }
 
@@ -49,14 +60,19 @@ function showTab(tab) {
 async function loadStatus() {
   const s = await api('/api/status');
   STATUSES = s.orderStatuses;
+  BRANDS = s.brands;
+  if (currentBrand && !brandOf(currentBrand)) currentBrand = '';
+  $('#brand-switch').innerHTML = `<option value="">全部品牌（${BRANDS.length}）</option>${BRANDS.map((b) => `<option value="${b.id}" ${String(b.id) === String(currentBrand) ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}`;
+  updateExportLinks();
   $('#order-status').innerHTML = `<option value="">全部狀態</option>${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}`;
-  const warn = s.lineConfigured ? '' : '⚠ 尚未設定 LINE 金鑰｜';
+  const missing = BRANDS.filter((b) => !b.has_secret || !b.has_token).length;
+  const warn = !BRANDS.length ? '⚠ 尚未建立品牌｜' : missing ? `⚠ ${missing} 個品牌尚未設定 LINE 金鑰｜` : '';
   $('#status').textContent = `${warn}今天 ${s.today}｜每日 ${s.dailyReportHour}:00 推播給 ${s.staffCount} 位客服｜自動匯款提醒：${s.autoPaymentReminder ? '開' : '關'}｜自動回購提醒：${s.autoReorderReminder ? '開' : '關'}`;
 }
 
 // ---------- focus ----------
 async function loadFocus() {
-  const data = await api('/api/focus');
+  const data = await api(`/api/focus?${brandQs()}`);
   $('#focus-title').textContent = `今日關懷清單 ${data.date}（${data.items.length} 位）`;
   const list = $('#focus-list');
   if (!data.items.length) { list.innerHTML = '<div class="card empty">今天沒有需要特別關心的客戶 🎉</div>'; return; }
@@ -68,7 +84,7 @@ async function loadFocus() {
     return `<div class="card focus-item p${item.priority}">
       ${c.picture_url ? `<img class="avatar" src="${esc(c.picture_url)}" alt="">` : '<div class="avatar"></div>'}
       <div>
-        <span class="name" data-open="${c.id}">${esc(nameOf(c))}</span>
+        ${brandTag(c.brand_id)}<span class="name" data-open="${c.id}">${esc(nameOf(c))}</span>
         ${c.real_name && c.display_name ? `<span class="muted">（LINE：${esc(c.display_name)}）</span>` : ''}
         ${c.tags ? `<span class="muted">｜${esc(c.tags)}</span>` : ''}
         ${item.canPush ? '' : '<span class="badge">非好友，無法推播</span>'}
@@ -105,12 +121,12 @@ document.querySelectorAll('#repurchase-filter button').forEach((b) => b.addEvent
   guard(loadRepurchase);
 }));
 async function loadRepurchase() {
-  const { rows } = await api(`/api/repurchase?filter=${repurchaseFilter}`);
+  const { rows } = await api(`/api/repurchase?filter=${repurchaseFilter}&${brandQs()}`);
   const total = rows.reduce((s, r) => s + r.stats.avgOrder, 0);
   $('#repurchase-summary').textContent = rows.length ? `${rows.length} 位，預估回購金額約 NT$${total.toLocaleString()}` : '';
   $('#repurchase-table').innerHTML = `<thead><tr><th>客戶</th><th>類型</th><th>購買次數</th><th>累積消費</th><th>客單價</th><th>最近購買</th><th>常買商品</th><th>回購週期</th><th>預計回購</th><th>上次提醒</th><th></th></tr></thead>
   <tbody>${rows.length ? rows.map(({ customer: c, stats: st, hasPending, lastReminder }) => `<tr class="clickable" data-open="${c.id}">
-    <td>${esc(nameOf(c))}${c.phone ? `<div class="muted">${esc(c.phone)}</div>` : ''}</td>
+    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.phone ? `<div class="muted">${esc(c.phone)}</div>` : ''}</td>
     <td>${SEGMENTS[st.segment]}</td><td>${st.orderCount}</td><td>${money(st.totalSpent)}</td><td>${money(st.avgOrder)}</td>
     <td>${esc(st.lastOrderDate)}<div class="muted">${esc(st.lastItems || '')}</div></td>
     <td>${st.topItems.map((i) => esc(i.name)).join('、')}</td>
@@ -125,11 +141,11 @@ async function loadRepurchase() {
 async function loadCustomers() {
   const q = encodeURIComponent($('#customer-q').value.trim());
   const tag = encodeURIComponent($('#customer-tag').value.trim());
-  const rows = await api(`/api/customers?q=${q}&tag=${tag}`);
+  const rows = await api(`/api/customers?q=${q}&tag=${tag}&${brandQs()}`);
   $('#customer-table').innerHTML = `<thead><tr><th></th><th>名稱</th><th>電話</th><th>標籤</th><th>訂單數</th><th>累積消費</th><th>最後下單</th><th>最後訊息</th><th>好友</th></tr></thead>
   <tbody>${rows.length ? rows.map((c) => `<tr class="clickable" data-open="${c.id}">
     <td>${c.picture_url ? `<img class="avatar" style="width:28px;height:28px" src="${esc(c.picture_url)}" alt="">` : ''}</td>
-    <td>${esc(nameOf(c))}${c.real_name && c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
+    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">客服</span>' : ''}${c.real_name && c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
     <td>${esc(c.phone)}</td><td>${esc(c.tags)}</td><td>${c.order_count}</td><td>${money(c.total_spent)}</td>
     <td>${esc(c.last_order_date || '')}</td><td>${fmtTime(c.last_inbound_at)}</td><td>${c.is_friend ? '✅' : '—'}</td>
   </tr>`).join('') : '<tr><td colspan="9" class="empty">尚無客戶。客戶加入官方帳號好友或傳訊息後會自動出現在這裡。</td></tr>'}</tbody>`;
@@ -137,25 +153,20 @@ async function loadCustomers() {
 let searchTimer;
 ['#customer-q', '#customer-tag'].forEach((s) => $(s).addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => guard(loadCustomers), 250); }));
 $('#new-customer').addEventListener('click', () => guard(async () => {
-  const name = prompt('客戶名稱（非 LINE 好友的客戶也可以手動建立）');
+  if (!currentBrand) throw new Error('請先在左上角選擇要新增到哪個品牌');
+  const name = prompt(`新增到「${brandOf(currentBrand).name}」的客戶名稱（非 LINE 好友的客戶也可以手動建立）`);
   if (!name) return;
-  const c = await api('/api/customers', { method: 'POST', body: { display_name: name } });
+  const c = await api('/api/customers', { method: 'POST', body: { brand_id: currentBrand, display_name: name } });
   loadCustomers();
   openCustomer(c.id);
-}));
-$('#sync-followers').addEventListener('click', () => guard(async () => {
-  toast('同步中…');
-  const r = await api('/api/sync-followers', { method: 'POST' });
-  toast(`好友共 ${r.total} 位，新增 ${r.added} 位`);
-  loadCustomers();
 }));
 
 // ---------- orders ----------
 async function loadOrders() {
-  const rows = await api(`/api/orders?status=${$('#order-status').value}`);
+  const rows = await api(`/api/orders?status=${$('#order-status').value}&${brandQs()}`);
   $('#order-table').innerHTML = `<thead><tr><th>#</th><th>日期</th><th>客戶</th><th>品項</th><th>金額</th><th>狀態</th><th>匯款期限</th><th>匯款回報</th></tr></thead>
   <tbody>${rows.length ? rows.map((o) => `<tr class="clickable" data-open="${o.customer_id}">
-    <td>${o.id}</td><td>${esc(o.order_date)}</td><td>${esc(o.real_name || o.display_name)}</td><td>${esc(o.items)}</td><td>${money(o.amount)}</td>
+    <td>${o.id}</td><td>${esc(o.order_date)}</td><td>${brandTag(o.brand_id)}${esc(o.real_name || o.display_name)}</td><td>${esc(o.items)}</td><td>${money(o.amount)}</td>
     <td>${esc(STATUSES[o.status])}</td><td>${o.status === 'pending_payment' ? esc(o.payment_due_date || '') : ''}</td><td>${esc(o.payment_report || '')}</td>
   </tr>`).join('') : '<tr><td colspan="8" class="empty">沒有訂單</td></tr>'}</tbody>`;
 }
@@ -164,7 +175,7 @@ $('#order-status').addEventListener('change', () => guard(loadOrders));
 // ---------- customer drawer ----------
 async function openCustomer(id, compose = null) {
   currentCustomerId = id;
-  const { customer: c, stats: st, orders, messages, reminders } = await api(`/api/customers/${id}`);
+  const { customer: c, brand, stats: st, orders, messages, reminders } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
   const field = (key, label, type = 'text', wide = false) => `<label class="${wide ? 'wide' : ''}">${label}${type === 'textarea' ? `<textarea name="${key}">${esc(c[key])}</textarea>` : `<input name="${key}" type="${type}" value="${esc(c[key])}">`}</label>`;
@@ -172,8 +183,9 @@ async function openCustomer(id, compose = null) {
   $('#drawer-body').innerHTML = `
     <div class="row">
       ${c.picture_url ? `<img class="avatar" src="${esc(c.picture_url)}" alt="">` : ''}
-      <div><h2>${esc(nameOf(c))}</h2><div class="muted">${c.line_user_id ? `LINE userId：${esc(c.line_user_id)}` : '手動建立（非 LINE 好友）'}｜${c.is_friend ? '好友' : '非好友／已封鎖'}｜加入 ${fmtTime(c.followed_at || c.created_at)}</div></div>
+      <div><h2>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">客服</span>' : ''}</h2><div class="muted">${esc(brand?.name || '')} 官方帳號｜${c.line_user_id ? `LINE userId：${esc(c.line_user_id)}` : '手動建立（非 LINE 好友）'}｜${c.is_friend ? '好友' : '非好友／已封鎖'}｜加入 ${fmtTime(c.followed_at || c.created_at)}</div></div>
       <span class="spacer"></span>
+      ${canPush ? `<button class="secondary small" id="toggle-staff" title="每天由「${esc(brand?.name || '')}」的官方帳號把關懷清單推播給這位">${c.is_staff ? '取消客服' : '設為客服'}</button>` : ''}
       <button class="secondary" id="close-drawer">關閉</button>
     </div>
 
@@ -242,6 +254,12 @@ async function openCustomer(id, compose = null) {
   chat.scrollTop = chat.scrollHeight;
 
   $('#close-drawer').onclick = () => dlg.close();
+  if ($('#toggle-staff')) $('#toggle-staff').onclick = () => guard(async () => {
+    await api(`/api/customers/${id}/staff`, { method: 'POST', body: { staff: !c.is_staff } });
+    toast(c.is_staff ? '已取消客服' : '已設為客服，每天會收到關懷清單');
+    loadStatus();
+    openCustomer(id);
+  });
   $('#customer-form').onsubmit = (e) => { e.preventDefault(); guard(async () => {
     await api(`/api/customers/${id}`, { method: 'PATCH', body: Object.fromEntries(new FormData(e.target)) });
     toast('已儲存'); openCustomer(id);
@@ -292,6 +310,86 @@ async function markPaid(orderId) {
   else toast(r.notified === true ? '已確認入帳並通知客戶' : `已確認入帳（通知失敗：${r.notified}）`, r.notified !== true);
 }
 
+// ---------- brands tab ----------
+async function loadBrands() {
+  const [brands, staff] = await Promise.all([api('/api/brands'), api('/api/customers').then((rows) => rows.filter((c) => c.is_staff))]);
+  BRANDS = brands;
+  const origin = location.origin;
+  $('#brand-list').innerHTML = brands.map((b) => `<div class="card brand-card" style="border-left-color:${esc(b.color)}">
+    <div>
+      <h2>${brandTag(b.id)} ${esc(b.name)}</h2>
+      <div class="muted" style="margin-top:4px">Webhook URL：<code>${esc(origin)}/webhook/${esc(b.slug)}</code></div>
+      <div class="muted">Channel secret：${b.has_secret ? '<span class="ok">已設定</span>' : '<span class="warn">未設定</span>'}｜Access token：${b.has_token ? `<span class="ok">已設定 ${esc(b.token_hint)}</span>` : '<span class="warn">未設定</span>'}${b.bank_info ? `｜匯款資訊：${esc(b.bank_info)}` : ''}</div>
+    </div>
+    <div class="actions">
+      <button class="small secondary" data-edit-brand="${b.id}">編輯</button>
+      <button class="small secondary" data-sync-brand="${b.id}" title="僅限認證 / 進階帳號">同步好友</button>
+    </div>
+    <form class="grid" data-brand-form="${b.id}" hidden>
+      ${brandFields(b)}
+      <div class="row" style="grid-column:1/-1"><button type="submit">儲存</button><button type="button" class="secondary" data-cancel>取消</button><span class="spacer"></span><button type="button" class="danger small" data-delete-brand="${b.id}">刪除品牌</button></div>
+    </form>
+  </div>`).join('') || '<div class="card empty">尚未建立品牌，請按右上角「新增品牌」</div>';
+  $('#staff-list').innerHTML = staff.length
+    ? staff.map((c) => `<div class="row">${brandTag(c.brand_id)}<span class="name" data-open="${c.id}">${esc(nameOf(c))}</span></div>`).join('')
+    : '<span class="muted">尚未設定客服</span>';
+
+  document.querySelectorAll('[data-edit-brand]').forEach((btn) => btn.onclick = () => { $(`[data-brand-form="${btn.dataset.editBrand}"]`).hidden = false; });
+  document.querySelectorAll('[data-brand-form]').forEach((f) => {
+    f.querySelector('[data-cancel]').onclick = () => { f.hidden = true; };
+    f.onsubmit = (e) => { e.preventDefault(); guard(async () => {
+      await api(`/api/brands/${f.dataset.brandForm}`, { method: 'PATCH', body: Object.fromEntries(new FormData(f)) });
+      toast('已儲存'); await loadStatus(); loadBrands();
+    }); };
+  });
+  document.querySelectorAll('[data-delete-brand]').forEach((btn) => btn.onclick = () => guard(async () => {
+    if (!confirm('確定刪除這個品牌？（品牌下還有客戶時無法刪除）')) return;
+    await api(`/api/brands/${btn.dataset.deleteBrand}`, { method: 'DELETE' });
+    await loadStatus(); loadBrands();
+  }));
+  document.querySelectorAll('[data-sync-brand]').forEach((btn) => btn.onclick = () => guard(async () => {
+    toast('同步中…');
+    const r = await api(`/api/brands/${btn.dataset.syncBrand}/sync-followers`, { method: 'POST' });
+    toast(`好友共 ${r.total} 位，新增 ${r.added} 位`);
+  }));
+}
+
+function brandFields(b = {}) {
+  const f = (key, label, extra = '') => `<label>${label}<input name="${key}" value="${esc(b[key] ?? '')}" ${extra}></label>`;
+  return `${f('name', '品牌名稱（會出現在給客戶的訊息）', 'required')}
+    ${f('slug', '網址代號（英數字，用於 Webhook）', 'pattern="[a-zA-Z0-9\\-]+" required')}
+    <label>代表色<input name="color" type="color" value="${esc(b.color || '#06c755')}"></label>
+    <label class="wide">Channel secret<input name="channel_secret" type="password" autocomplete="off" placeholder="${b.has_secret ? '已設定，留空表示不修改' : '請貼上'}"></label>
+    <label class="wide">Channel access token（長期）<input name="channel_access_token" type="password" autocomplete="off" placeholder="${b.has_token ? '已設定，留空表示不修改' : '請貼上'}"></label>
+    ${f('bank_info', '匯款資訊（會放進匯款提醒）').replace('<label>', '<label class="wide">')}`;
+}
+
+$('#new-brand').addEventListener('click', () => {
+  const dlg = $('#drawer');
+  $('#drawer-body').innerHTML = `<div class="row"><h2>新增品牌</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
+    <form id="brand-new" class="grid" style="margin-top:12px">${brandFields()}<div class="row" style="grid-column:1/-1"><button type="submit">建立</button></div></form>`;
+  dlg.showModal();
+  $('#close-drawer').onclick = () => dlg.close();
+  $('#brand-new').onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    const b = await api('/api/brands', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+    toast(`已建立「${b.name}」，請到 LINE Developers 設定 Webhook`);
+    dlg.close();
+    await loadStatus();
+  }); };
+});
+
+function updateExportLinks() {
+  $('#export-customers').href = `/api/export/customers.csv?${brandQs()}`;
+  $('#export-orders').href = `/api/export/orders.csv?${brandQs()}`;
+}
+
+$('#brand-switch').addEventListener('change', (e) => {
+  currentBrand = e.target.value;
+  prefs.set('brand', currentBrand);
+  updateExportLinks();
+  refreshCurrentTab();
+});
+
 $('#drawer').addEventListener('close', () => { currentCustomerId = null; refreshCurrentTab(); });
 function refreshCurrentTab() {
   const tab = document.querySelector('nav button.active').dataset.tab;
@@ -313,5 +411,5 @@ document.addEventListener('click', (e) => {
   if (t.dataset.open) return guard(() => openCustomer(Number(t.dataset.open)));
 });
 
-const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders };
+const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, brands: loadBrands };
 guard(async () => { await loadStatus(); await loadFocus(); });
