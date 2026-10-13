@@ -73,7 +73,7 @@ export function customerStats(customer, orders, config, t = today(config.tz)) {
 
 // 回購名單：所有下過單的客戶，依「預計回購日」排序
 //   filter: due（已到回購日）| soon（7 天內）| dormant（沉睡）| all
-export function buildRepurchaseList(store, config, { filter = 'all' } = {}) {
+export function buildRepurchaseList(store, config, { filter = 'all', brandId = null } = {}) {
   const t = today(config.tz);
   const byCustomer = new Map();
   for (const o of store.all('SELECT * FROM orders')) {
@@ -81,7 +81,10 @@ export function buildRepurchaseList(store, config, { filter = 'all' } = {}) {
     byCustomer.get(o.customer_id).push(o);
   }
   const rows = [];
-  for (const c of store.all('SELECT * FROM customers')) {
+  const staff = new Set(store.staffIds());
+  const customers = brandId ? store.all('SELECT * FROM customers WHERE brand_id = ?', brandId) : store.all('SELECT * FROM customers');
+  for (const c of customers) {
+    if (staff.has(c.id)) continue;
     const stats = customerStats(c, byCustomer.get(c.id) || [], config, t);
     if (!stats.orderCount) continue;
     const hasPending = (byCustomer.get(c.id) || []).some((o) => o.status === 'pending_payment');

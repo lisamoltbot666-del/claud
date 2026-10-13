@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 :root {
   --bg: #f5f6f8;
   --card: #fff;
@@ -90,3 +91,11 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .history { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .due { color: var(--red); font-weight: 600; }
 .soon { color: var(--amber); font-weight: 600; }
+
+.brand-tag { display: inline-block; font-size: 12px; line-height: 18px; padding: 0 7px; border-radius: 9px; color: #fff; white-space: nowrap; vertical-align: middle; margin-right: 4px; }
+#brand-switch { font-weight: 600; }
+.brand-card { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; border-left: 6px solid var(--line); }
+.brand-card code { font-size: 13px; background: var(--bg); padding: 2px 6px; border-radius: 4px; word-break: break-all; }
+.brand-card form { grid-column: 1 / -1; }
+.ok { color: var(--brand); }
+.warn { color: var(--amber); }

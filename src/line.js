@@ -62,3 +62,17 @@ export class LineClient {
     return ids;
   }
 }
+
+// 每個品牌用自己的 Channel access token；依 token 快取 client
+export class LineRegistry {
+  constructor(factory = (token) => new LineClient(token)) {
+    this.factory = factory;
+    this.cache = new Map();
+  }
+
+  for(brand) {
+    const token = brand?.channel_access_token || '';
+    if (!this.cache.has(token)) this.cache.set(token, this.factory(token));
+    return this.cache.get(token);
+  }
+}

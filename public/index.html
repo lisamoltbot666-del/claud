@@ -9,11 +9,13 @@
 <body>
   <header>
     <h1>LINE 客戶管理</h1>
+    <select id="brand-switch" title="切換品牌"><option value="">全部品牌</option></select>
     <nav>
       <button data-tab="focus" class="active">今日關懷</button>
       <button data-tab="repurchase">回購</button>
       <button data-tab="customers">客戶</button>
       <button data-tab="orders">訂單</button>
+      <button data-tab="brands">品牌</button>
     </nav>
     <div id="status" class="muted"></div>
   </header>
@@ -49,8 +51,7 @@
         <input id="customer-q" type="search" placeholder="搜尋名稱、電話、備註…">
         <input id="customer-tag" type="search" placeholder="標籤" size="8">
         <span class="spacer"></span>
-        <button id="sync-followers" class="secondary" title="僅限認證 / 進階帳號">同步 LINE 好友</button>
-        <a class="button secondary" href="/api/export/customers.csv">匯出 CSV</a>
+        <a class="button secondary" id="export-customers" href="/api/export/customers.csv">匯出 CSV</a>
         <button id="new-customer">新增客戶</button>
       </div>
       <div class="table-wrap"><table id="customer-table"></table></div>
@@ -60,9 +61,21 @@
       <div class="toolbar">
         <select id="order-status"><option value="">全部狀態</option></select>
         <span class="spacer"></span>
-        <a class="button secondary" href="/api/export/orders.csv">匯出消費紀錄 CSV</a>
+        <a class="button secondary" id="export-orders" href="/api/export/orders.csv">匯出消費紀錄 CSV</a>
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
+    </section>
+    <section id="tab-brands" hidden>
+      <div class="toolbar">
+        <h2>品牌與 LINE 官方帳號</h2>
+        <span class="spacer"></span>
+        <button id="new-brand">新增品牌</button>
+      </div>
+      <p class="muted">每個品牌對應一個 LINE 官方帳號。到 LINE Developers 該帳號的 Messaging API 設定頁，把 Webhook URL 設成下方顯示的網址。</p>
+      <div id="brand-list"></div>
+      <h3>每日清單通知對象（客服）</h3>
+      <p class="muted">客服用自己的 LINE 加任一品牌官方帳號好友並傳一則訊息，再到「客戶」找到這位客服、點「設為客服」。每天的清單（含所有品牌）會由該品牌的帳號推播給對方。</p>
+      <div id="staff-list" class="card"></div>
     </section>
   </main>
 
