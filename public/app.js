@@ -4,7 +4,16 @@ const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString('zh-TW', { hour12: 
 const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
 const nameOf = (c) => c.real_name || c.display_name || `客戶#${c.id}`;
 const PRIORITY = { 1: '緊急', 2: '今日', 3: '有空時' };
-const KIND_LABEL = { payment: '匯款提醒', reorder: '回購提醒', care: '關心問候', custom: '訊息' };
+const KIND_LABEL = { payment: '匯款提醒', reorder: '回購提醒', care: '關心問候', birthday: '生日祝福', custom: '訊息' };
+const SEGMENTS = { none: '尚未下單', first: '首購客', repeat: '回購客', loyal: '忠實客', dormant: '沉睡客' };
+const reorderIn = (st) => {
+  if (st.nextReorderDate == null) return '';
+  const d = st.daysUntilReorder;
+  return d < 0 ? `<span class="due">已過 ${-d} 天</span>` : d === 0 ? '<span class="due">今天</span>' : d <= 7 ? `<span class="soon">${d} 天後</span>` : `${d} 天後`;
+};
+const historyLine = (st) => (st?.orderCount
+  ? `${SEGMENTS[st.segment]}｜購買 ${st.orderCount} 次｜累積 ${money(st.totalSpent)}｜客單價 ${money(st.avgOrder)}｜最近 ${esc(st.lastOrderDate)}${st.lastItems ? ` 買了「${esc(st.lastItems)}」` : ''}${st.topItems.length ? `｜常買：${st.topItems.map((i) => esc(i.name)).join('、')}` : ''}`
+  : '尚無消費紀錄');
 let STATUSES = {};
 let currentCustomerId = null;
 
@@ -32,8 +41,8 @@ async function guard(fn) {
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 function showTab(tab) {
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['focus', 'customers', 'orders']) $(`#tab-${t}`).hidden = t !== tab;
-  ({ focus: loadFocus, customers: loadCustomers, orders: loadOrders })[tab]();
+  for (const t of ['focus', 'repurchase', 'customers', 'orders']) $(`#tab-${t}`).hidden = t !== tab;
+  guard(LOADERS[tab]);
 }
 
 // ---------- status ----------
@@ -63,6 +72,7 @@ async function loadFocus() {
         ${c.real_name && c.display_name ? `<span class="muted">（LINE：${esc(c.display_name)}）</span>` : ''}
         ${c.tags ? `<span class="muted">｜${esc(c.tags)}</span>` : ''}
         ${item.canPush ? '' : '<span class="badge">非好友，無法推播</span>'}
+        <div class="history">${historyLine(item.stats)}${c.phone ? `｜☎ ${esc(c.phone)}` : ''}</div>
         <ul class="reasons">${item.reasons.map((r) => `<li><span class="badge p${r.priority}">${PRIORITY[r.priority]}</span>${esc(r.label)} <span class="muted">${esc(r.detail || '')}${r.remindCount ? `｜已提醒 ${r.remindCount} 次，最近 ${fmtTime(r.lastRemindedAt)}` : ''}</span></li>`).join('')}</ul>
       </div>
       <div class="actions">
@@ -70,6 +80,7 @@ async function loadFocus() {
         ${actions.has('payment') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="payment" data-order="${payOrder}">發送匯款提醒</button>` : ''}
         ${actions.has('reorder') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="reorder">發送回購提醒</button>` : ''}
         ${actions.has('care') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="care">發送關心問候</button>` : ''}
+        ${actions.has('birthday') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="birthday">發送生日祝福</button>` : ''}
         ${actions.has('reply') ? `<button class="small secondary" data-handled="${c.id}">標記已回覆</button>` : ''}
         ${actions.has('care') || actions.has('reorder') ? `<button class="small secondary" data-postpone="${c.id}">延後 3 天</button>` : ''}
         <button class="small secondary" data-open="${c.id}">查看客戶</button>
@@ -85,6 +96,30 @@ $('#run-daily').addEventListener('click', () => guard(async () => {
   toast(`已通知 ${r.staffNotified} 位客服，自動匯款提醒 ${r.paymentSent} 則、回購提醒 ${r.reorderSent} 則`);
   loadFocus();
 }));
+
+// ---------- repurchase ----------
+let repurchaseFilter = 'due';
+document.querySelectorAll('#repurchase-filter button').forEach((b) => b.addEventListener('click', () => {
+  repurchaseFilter = b.dataset.filter;
+  document.querySelectorAll('#repurchase-filter button').forEach((x) => x.classList.toggle('active', x === b));
+  guard(loadRepurchase);
+}));
+async function loadRepurchase() {
+  const { rows } = await api(`/api/repurchase?filter=${repurchaseFilter}`);
+  const total = rows.reduce((s, r) => s + r.stats.avgOrder, 0);
+  $('#repurchase-summary').textContent = rows.length ? `${rows.length} 位，預估回購金額約 NT$${total.toLocaleString()}` : '';
+  $('#repurchase-table').innerHTML = `<thead><tr><th>客戶</th><th>類型</th><th>購買次數</th><th>累積消費</th><th>客單價</th><th>最近購買</th><th>常買商品</th><th>回購週期</th><th>預計回購</th><th>上次提醒</th><th></th></tr></thead>
+  <tbody>${rows.length ? rows.map(({ customer: c, stats: st, hasPending, lastReminder }) => `<tr class="clickable" data-open="${c.id}">
+    <td>${esc(nameOf(c))}${c.phone ? `<div class="muted">${esc(c.phone)}</div>` : ''}</td>
+    <td>${SEGMENTS[st.segment]}</td><td>${st.orderCount}</td><td>${money(st.totalSpent)}</td><td>${money(st.avgOrder)}</td>
+    <td>${esc(st.lastOrderDate)}<div class="muted">${esc(st.lastItems || '')}</div></td>
+    <td>${st.topItems.map((i) => esc(i.name)).join('、')}</td>
+    <td>${st.cycle.days} 天<div class="muted">${esc(st.cycle.source)}</div></td>
+    <td>${esc(st.nextReorderDate)}<div>${hasPending ? '<span class="muted">有待匯款訂單</span>' : reorderIn(st)}</div></td>
+    <td class="muted">${lastReminder ? fmtTime(lastReminder.sent_at) : '—'}</td>
+    <td>${c.line_user_id && c.is_friend && !hasPending ? `<button class="small" data-compose="${c.id}" data-kind="reorder">回購提醒</button>` : ''}</td>
+  </tr>`).join('') : '<tr><td colspan="11" class="empty">目前沒有符合的客戶</td></tr>'}</tbody>`;
+}
 
 // ---------- customers ----------
 async function loadCustomers() {
@@ -129,7 +164,7 @@ $('#order-status').addEventListener('change', () => guard(loadOrders));
 // ---------- customer drawer ----------
 async function openCustomer(id, compose = null) {
   currentCustomerId = id;
-  const { customer: c, orders, messages, reminders } = await api(`/api/customers/${id}`);
+  const { customer: c, stats: st, orders, messages, reminders } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
   const field = (key, label, type = 'text', wide = false) => `<label class="${wide ? 'wide' : ''}">${label}${type === 'textarea' ? `<textarea name="${key}">${esc(c[key])}</textarea>` : `<input name="${key}" type="${type}" value="${esc(c[key])}">`}</label>`;
@@ -142,15 +177,29 @@ async function openCustomer(id, compose = null) {
       <button class="secondary" id="close-drawer">關閉</button>
     </div>
 
-    <h3>客戶資料</h3>
+    <h3>消費總覽</h3>
+    <div class="tiles">
+      <div class="tile"><div class="label">客戶類型</div><div class="value">${SEGMENTS[st.segment]}</div><div class="sub">回購 ${st.repeatCount} 次</div></div>
+      <div class="tile"><div class="label">購買次數</div><div class="value">${st.orderCount}</div><div class="sub">已付款 ${st.paidCount} 筆</div></div>
+      <div class="tile"><div class="label">累積消費</div><div class="value">${money(st.totalSpent)}</div><div class="sub">${st.pendingAmount ? `待匯款 ${money(st.pendingAmount)}` : '&nbsp;'}</div></div>
+      <div class="tile"><div class="label">平均客單價</div><div class="value">${money(st.avgOrder)}</div><div class="sub">&nbsp;</div></div>
+      <div class="tile"><div class="label">首次 / 最近購買</div><div class="value" style="font-size:14px">${esc(st.firstOrderDate || '—')}<br>${esc(st.lastOrderDate || '—')}</div><div class="sub">${st.daysSinceLastOrder != null ? `距今 ${st.daysSinceLastOrder} 天` : ''}</div></div>
+      <div class="tile"><div class="label">回購週期</div><div class="value">${st.cycle ? `${st.cycle.days} 天` : '—'}</div><div class="sub">${esc(st.cycle?.source || '')}</div></div>
+      <div class="tile"><div class="label">預計回購日</div><div class="value" style="font-size:14px">${esc(st.nextReorderDate || '—')}</div><div class="sub">${reorderIn(st)}</div></div>
+      <div class="tile"><div class="label">常買商品</div><div class="value" style="font-size:14px">${st.topItems.map((i) => `${esc(i.name)} <span class="muted">×${i.count}</span>`).join('<br>') || '—'}</div></div>
+    </div>
+
+    <h3>基本資料</h3>
     <form id="customer-form" class="grid">
       ${field('display_name', 'LINE 名稱')}${field('real_name', '真實姓名')}${field('phone', '電話', 'tel')}
+      ${field('email', 'Email', 'email')}${field('birthday', '生日', 'date')}
+      <label>性別<select name="gender">${['', '女', '男', '其他'].map((g) => `<option value="${g}" ${g === (c.gender || '') ? 'selected' : ''}>${g || '—'}</option>`).join('')}</select></label>
       ${field('tags', '標籤（逗號分隔，如 VIP,團購）')}${field('reorder_days', '回購週期（天，空白自動推算）', 'number')}${field('next_contact_date', '下次聯絡日', 'date')}
       ${field('address', '地址', 'text', true)}${field('note', '備註（喜好、注意事項…）', 'textarea', true)}
       <div class="row wide" style="grid-column:1/-1"><button type="submit">儲存資料</button><span class="spacer"></span><button type="button" class="danger small" id="delete-customer">刪除客戶</button></div>
     </form>
 
-    <h3>訂單</h3>
+    <h3>消費紀錄（${orders.length} 筆）</h3>
     <div class="table-wrap"><table>
       <thead><tr><th>#</th><th>日期</th><th>品項</th><th>金額</th><th>狀態</th><th>匯款期限 / 回報</th><th></th></tr></thead>
       <tbody>${orders.map((o) => `<tr>
@@ -173,6 +222,7 @@ async function openCustomer(id, compose = null) {
       ${pendingOrders.map((o) => `<button class="small secondary" data-template="payment" data-order="${o.id}">匯款提醒 #${o.id}</button>`).join('')}
       <button class="small secondary" data-template="reorder">回購提醒</button>
       <button class="small secondary" data-template="care">關心問候</button>
+      <button class="small secondary" data-template="birthday">生日祝福</button>
     </div>
     <form id="send-form">
       <textarea name="text" placeholder="輸入訊息，或點上方按鈕套用範本"></textarea>
@@ -245,7 +295,7 @@ async function markPaid(orderId) {
 $('#drawer').addEventListener('close', () => { currentCustomerId = null; refreshCurrentTab(); });
 function refreshCurrentTab() {
   const tab = document.querySelector('nav button.active').dataset.tab;
-  guard(({ focus: loadFocus, customers: loadCustomers, orders: loadOrders })[tab]);
+  guard(LOADERS[tab]);
 }
 
 // 共用的點擊事件
@@ -263,4 +313,5 @@ document.addEventListener('click', (e) => {
   if (t.dataset.open) return guard(() => openCustomer(Number(t.dataset.open)));
 });
 
+const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders };
 guard(async () => { await loadStatus(); await loadFocus(); });

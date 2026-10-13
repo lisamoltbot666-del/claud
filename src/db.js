@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS customers (
   status_message TEXT,
   real_name TEXT,
   phone TEXT,
+  email TEXT,
+  birthday TEXT,                 -- YYYY-MM-DD
+  gender TEXT,
   address TEXT,
   tags TEXT,
   note TEXT,
@@ -81,7 +84,7 @@ export const ORDER_STATUSES = {
   cancelled: '已取消',
 };
 
-const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
+const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
 const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note'];
 
 const nowIso = () => new Date().toISOString();
@@ -92,6 +95,9 @@ export function openDb(dbPath) {
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  // 舊版資料庫補上新欄位
+  const cols = new Set(db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name));
+  for (const col of ['email', 'birthday', 'gender']) if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
   return new Store(db);
 }
 

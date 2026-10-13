@@ -78,3 +78,15 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   .focus-item .actions { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
   .avatar { width: 36px; height: 36px; }
 }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { background: transparent; color: var(--text); border-radius: 0; padding: 4px 10px; }
+.seg button.active { background: var(--brand); color: #fff; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.tile { background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+.tile .label { font-size: 12px; color: var(--muted); }
+.tile .value { font-size: 17px; font-weight: 600; }
+.tile .sub { font-size: 12px; color: var(--muted); }
+.history { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.due { color: var(--red); font-weight: 600; }
+.soon { color: var(--amber); font-weight: 600; }

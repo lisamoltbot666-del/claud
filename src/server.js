@@ -7,6 +7,7 @@ import { getConfig, loadEnvFile } from './config.js';
 import { addDays, today } from './dates.js';
 import { ORDER_STATUSES, openDb } from './db.js';
 import { buildFocusList } from './focus.js';
+import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { LineClient, verifySignature } from './line.js';
 import { ReminderService, startScheduler, templates } from './reminders.js';
 import { WebhookHandler } from './webhook.js';
@@ -82,11 +83,13 @@ export function createApp({ store, line, config, logger = console }) {
       orderStatuses: ORDER_STATUSES,
     })],
     ['GET', /^\/api\/focus$/, () => buildFocusList(store, config)],
+    ['GET', /^\/api\/repurchase$/, (_m, _b, url) => ({ ...buildRepurchaseList(store, config, { filter: url.searchParams.get('filter') || 'all' }), segments: SEGMENTS })],
     ['GET', /^\/api\/customers$/, (_m, _b, url) => store.listCustomers({ q: url.searchParams.get('q') || '', tag: url.searchParams.get('tag') || '' })],
     ['POST', /^\/api\/customers$/, (_m, body) => store.createCustomer(body)],
     ['GET', /^\/api\/customers\/(\d+)$/, ([, id]) => {
       const c = mustCustomer(toId(id));
-      return { customer: c, orders: store.listOrders({ customerId: c.id }), messages: store.listMessages(c.id), reminders: store.listReminders(c.id) };
+      const orders = store.listOrders({ customerId: c.id });
+      return { customer: c, stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id) };
     }],
     ['PATCH', /^\/api\/customers\/(\d+)$/, ([, id], body) => { mustCustomer(toId(id)); return store.updateCustomer(toId(id), body); }],
     ['DELETE', /^\/api\/customers\/(\d+)$/, ([, id]) => { store.deleteCustomer(toId(id)); return { ok: true }; }],
@@ -95,7 +98,7 @@ export function createApp({ store, line, config, logger = console }) {
       text: reminders.preview({ customerId: mustCustomer(toId(id)).id, kind: url.searchParams.get('kind'), orderId: url.searchParams.get('orderId') ? toId(url.searchParams.get('orderId')) : null }),
     })],
     ['POST', /^\/api\/customers\/(\d+)\/send$/, async ([, id], body) => {
-      const kind = ['payment', 'reorder', 'care', 'custom'].includes(body.kind) ? body.kind : 'custom';
+      const kind = ['payment', 'reorder', 'care', 'birthday', 'custom'].includes(body.kind) ? body.kind : 'custom';
       try {
         return await reminders.send({ customerId: mustCustomer(toId(id)).id, kind, orderId: body.orderId ? toId(body.orderId) : null, text: body.text });
       } catch (e) {
@@ -153,10 +156,41 @@ export function createApp({ store, line, config, logger = console }) {
     ['POST', /^\/api\/run-daily$/, (_m, _b, _u, req) => reminders.runDaily(new Date(), { baseUrl: `http://${req.headers.host}` })],
   ];
 
-  function exportCsv() {
-    const cols = ['id', 'display_name', 'real_name', 'phone', 'address', 'tags', 'note', 'is_friend', 'followed_at', 'order_count', 'total_spent', 'last_order_date', 'line_user_id'];
-    const rows = store.listCustomers().map((c) => cols.map((k) => csvCell(c[k])).join(','));
-    return `﻿${[cols.join(','), ...rows].join('\r\n')}`;
+  const toCsv = (cols, rows) => `\uFEFF${[cols.map(([, label]) => csvCell(label)).join(','), ...rows.map((r) => cols.map(([k]) => csvCell(r[k])).join(','))].join('\r\n')}`;
+
+  function exportCustomersCsv() {
+    const all = buildRepurchaseList(store, config).rows;
+    const statsById = new Map(all.map((r) => [r.customer.id, r.stats]));
+    const rows = store.listCustomers().map((c) => {
+      const st = statsById.get(c.id);
+      return {
+        ...c,
+        segment: SEGMENTS[st?.segment || 'none'],
+        order_count: st?.orderCount ?? 0,
+        total_spent: st?.totalSpent ?? 0,
+        avg_order: st?.avgOrder ?? 0,
+        first_order_date: st?.firstOrderDate,
+        last_order_date: st?.lastOrderDate,
+        cycle_days: st?.cycle?.days,
+        next_reorder_date: st?.nextReorderDate,
+        top_items: st?.topItems.map((i) => i.name).join('、'),
+        is_friend: c.is_friend ? '是' : '否',
+      };
+    });
+    return toCsv([
+      ['id', '編號'], ['display_name', 'LINE 名稱'], ['real_name', '姓名'], ['phone', '電話'], ['email', 'Email'], ['birthday', '生日'], ['gender', '性別'],
+      ['address', '地址'], ['tags', '標籤'], ['note', '備註'], ['segment', '客戶類型'], ['order_count', '購買次數'], ['total_spent', '累積消費'], ['avg_order', '平均客單價'],
+      ['first_order_date', '首次購買'], ['last_order_date', '最近購買'], ['cycle_days', '回購週期(天)'], ['next_reorder_date', '預計回購日'], ['top_items', '常買商品'],
+      ['is_friend', 'LINE 好友'], ['line_user_id', 'LINE userId'],
+    ], rows);
+  }
+
+  function exportOrdersCsv() {
+    const rows = store.listOrders().map((o) => ({ ...o, customer_name: o.real_name || o.display_name, status_label: ORDER_STATUSES[o.status] }));
+    return toCsv([
+      ['id', '訂單編號'], ['order_date', '日期'], ['customer_id', '客戶編號'], ['customer_name', '客戶'], ['items', '品項'], ['amount', '金額'],
+      ['status_label', '狀態'], ['payment_due_date', '匯款期限'], ['payment_report', '匯款回報'], ['paid_at', '入帳時間'], ['note', '備註'],
+    ], rows);
   }
 
   return async function handler(req, res) {
@@ -180,8 +214,10 @@ export function createApp({ store, line, config, logger = console }) {
         const file = path.join(PUBLIC_DIR, STATIC[url.pathname]);
         return send(res, 200, fs.readFileSync(file), { 'Content-Type': MIME[path.extname(file)], 'Cache-Control': 'no-cache' });
       }
-      if (req.method === 'GET' && url.pathname === '/api/export/customers.csv') {
-        return send(res, 200, exportCsv(), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="customers-${today(config.tz)}.csv"` });
+      const exports = { '/api/export/customers.csv': ['customers', exportCustomersCsv], '/api/export/orders.csv': ['orders', exportOrdersCsv] };
+      if (req.method === 'GET' && exports[url.pathname]) {
+        const [name, fn] = exports[url.pathname];
+        return send(res, 200, fn(), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}-${today(config.tz)}.csv"` });
       }
 
       for (const [method, pattern, fn] of routes) {

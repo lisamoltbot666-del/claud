@@ -11,6 +11,7 @@
     <h1>LINE 客戶管理</h1>
     <nav>
       <button data-tab="focus" class="active">今日關懷</button>
+      <button data-tab="repurchase">回購</button>
       <button data-tab="customers">客戶</button>
       <button data-tab="orders">訂單</button>
     </nav>
@@ -26,6 +27,21 @@
         <button id="refresh-focus" class="secondary">重新整理</button>
       </div>
       <div id="focus-list"></div>
+    </section>
+
+    <section id="tab-repurchase" hidden>
+      <div class="toolbar">
+        <h2>回購追蹤</h2>
+        <div class="seg" id="repurchase-filter">
+          <button data-filter="due" class="active">該回購了</button>
+          <button data-filter="soon">7 天內</button>
+          <button data-filter="dormant">沉睡客</button>
+          <button data-filter="all">全部</button>
+        </div>
+        <span class="spacer"></span>
+        <span class="muted" id="repurchase-summary"></span>
+      </div>
+      <div class="table-wrap"><table id="repurchase-table"></table></div>
     </section>
 
     <section id="tab-customers" hidden>
@@ -44,6 +60,7 @@
       <div class="toolbar">
         <select id="order-status"><option value="">全部狀態</option></select>
         <span class="spacer"></span>
+        <a class="button secondary" href="/api/export/orders.csv">匯出消費紀錄 CSV</a>
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
     </section>

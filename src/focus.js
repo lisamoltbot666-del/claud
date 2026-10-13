@@ -1,4 +1,5 @@
 import { addDays, dateOf, diffDays, formatDateTime, today } from './dates.js';
+import { customerStats } from './profile.js';
 
 // 產生「今日關懷清單」：哪些客戶今天需要客服特別關心、為什麼、建議做什麼
 //
@@ -10,21 +11,12 @@ import { addDays, dateOf, diffDays, formatDateTime, today } from './dates.js';
 //   2 未匯款，明天到期
 //   2 客服排定今天（或更早）要聯絡
 //   2 依回購週期，該回購了
+//   2 今天生日
 //   3 新好友尚未下單
 
 export const PRIORITY_LABELS = { 1: '緊急', 2: '今日', 3: '有空時' };
 
-export function reorderCycle(customer, orderDates, defaultDays) {
-  if (customer.reorder_days) return { days: Number(customer.reorder_days), source: '手動設定' };
-  const dates = [...new Set(orderDates)].sort();
-  if (dates.length >= 2) {
-    const gaps = [];
-    for (let i = 1; i < dates.length; i++) gaps.push(diffDays(dates[i], dates[i - 1]));
-    const avg = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length);
-    if (avg > 0) return { days: avg, source: `依 ${dates.length} 筆訂單平均` };
-  }
-  return { days: defaultDays, source: '預設值' };
-}
+export { reorderCycle } from './profile.js';
 
 export function buildFocusList(store, config, now = new Date()) {
   const tz = config.tz;
@@ -33,7 +25,7 @@ export function buildFocusList(store, config, now = new Date()) {
   const cooldownStart = addDays(t, -config.reminderCooldownDays);
 
   const customers = store.all('SELECT * FROM customers');
-  const orders = store.all("SELECT * FROM orders WHERE status != 'cancelled' ORDER BY order_date");
+  const orders = store.all("SELECT * FROM orders WHERE status != 'cancelled' ORDER BY order_date, id");
   const ordersByCustomer = new Map();
   for (const o of orders) {
     if (!ordersByCustomer.has(o.customer_id)) ordersByCustomer.set(o.customer_id, []);
@@ -79,14 +71,13 @@ export function buildFocusList(store, config, now = new Date()) {
     // 客服按「延後」會把下次聯絡日設在未來，期間不再列入回購 / 新好友提醒
     const snoozed = Boolean(c.next_contact_date && c.next_contact_date > t);
 
-    const placed = list.filter((o) => o.status !== 'pending_payment');
-    if (placed.length && !pending.length && !snoozed) {
-      const cycle = reorderCycle(c, list.map((o) => o.order_date), config.defaultReorderDays);
-      const lastOrder = list[list.length - 1].order_date;
-      const since = diffDays(t, lastOrder);
-      if (since >= cycle.days && !recentlyReminded(c.id, 'reorder')) {
-        reasons.push({ code: 'reorder', priority: 2, label: '該回購了', detail: `距上次下單 ${since} 天（回購週期 ${cycle.days} 天，${cycle.source}）`, action: 'reorder' });
-      }
+    const stats = customerStats(c, list, config, t);
+    if (stats.orderCount && !pending.length && !snoozed && stats.daysUntilReorder <= 0 && !recentlyReminded(c.id, 'reorder')) {
+      reasons.push({ code: 'reorder', priority: 2, label: '該回購了', detail: `距上次購買 ${stats.daysSinceLastOrder} 天（回購週期 ${stats.cycle.days} 天，${stats.cycle.source}）${stats.lastItems ? `｜上次買：${stats.lastItems}` : ''}`, action: 'reorder' });
+    }
+
+    if (c.birthday && c.birthday.slice(5) === t.slice(5) && !recentlyReminded(c.id, 'birthday')) {
+      reasons.push({ code: 'birthday', priority: 2, label: '今天生日 🎂', detail: '', action: 'birthday' });
     }
 
     if (!list.length && !snoozed && c.is_friend && c.followed_at && dateOf(c.followed_at, tz) >= addDays(t, -config.newFriendDays) && !recentlyReminded(c.id, 'care')) {
@@ -100,6 +91,7 @@ export function buildFocusList(store, config, now = new Date()) {
         canPush: Boolean(c.line_user_id && c.is_friend),
         priority: reasons[0].priority,
         reasons,
+        stats,
       });
     }
   }
@@ -118,7 +110,9 @@ export function formatFocusSummary(focus, { shopName = '', baseUrl = '' } = {}) 
     lines.push('', `■ ${PRIORITY_LABELS[p]}（${group.length}）`);
     for (const item of group) {
       const name = item.customer.real_name || item.customer.display_name || `客戶#${item.customer.id}`;
-      lines.push(`・${name}：${item.reasons.map((r) => r.label).join('、')}`);
+      const s = item.stats;
+      const history = s?.orderCount ? `（購買 ${s.orderCount} 次，累積 NT$${s.totalSpent}${s.lastItems ? `，上次：${s.lastItems}` : ''}）` : '';
+      lines.push(`・${name}：${item.reasons.map((r) => r.label).join('、')}${history}`);
     }
   }
   if (baseUrl) lines.push('', `後台：${baseUrl}`);

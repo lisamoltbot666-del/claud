@@ -18,6 +18,9 @@ export const templates = {
   care(c, _o, cfg) {
     return `${nameOf(c)} 您好，謝謝您加入${cfg.shopName}的好友 💛\n有任何想了解的商品或問題，直接在這裡留言，我們會很快回覆您！`;
   },
+  birthday(c, _o, cfg) {
+    return `${nameOf(c)} 生日快樂 🎂\n${cfg.shopName}祝您今天開開心心！感謝一直以來的支持，有需要隨時找我們喔 💛`;
+  },
   paymentReceived(c, o, cfg) {
     return `${nameOf(c)} 您好，已收到您訂單 #${o.id} 的款項 NT$${o.amount}，我們會盡快為您出貨，謝謝支持${cfg.shopName}！`;
   },
