@@ -20,7 +20,7 @@ export const templates = {
   // 只引用訂單裡有的事實（上次品項、天數），不寫資料沒有的優惠或服務
   reorder(c, _o, cfg, stats) {
     const hello = `${nameOf(c)} 您好，這裡是${cfg.shopName} 😊`;
-    const reply = '想再訂、或想問其他商品，直接回覆這則訊息就可以，我們會幫您安排！';
+    const reply = '直接回覆這則訊息就可以，我們會幫您安排！';
     if (!stats?.orderCount) return `${hello}\n距離上次訂購已經一段時間了，商品還夠用嗎？需要再幫您安排一份嗎？${reply}`;
     const items = parseItems(stats.lastItems).join('、');
     const what = items ? `的${items}` : '的商品';
