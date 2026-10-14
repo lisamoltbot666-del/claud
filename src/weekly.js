@@ -106,7 +106,7 @@ export function buildWeekly(store, config, { now = new Date(), brandIds = null }
   if (funnel.totals.stale) suggestions.push(`有 ${funnel.totals.stale} 位詢問超過 ${STALE_DAYS} 天沒成交也沒標記原因，請客服補上原因，下週的分析才會準。`);
   if (funnel.totals.open) suggestions.push(`還有 ${funnel.totals.open} 位上週的詢問在洽談中，記得追蹤。`);
   const R = response.totals;
-  if (R.answered >= 5 && R.median > 60) suggestions.push(`客服回覆時間中位數 ${formatMinutes(R.median)}，偏慢：詢問越快回覆越容易成交，建議 30 分鐘內先回一句，並多用常用回覆範本。`);
+  if (R.answered >= 5 && R.median > 60) suggestions.push(`客服回覆時間中位數約 ${formatMinutes(R.median)}，偏慢：詢問越快回覆越容易成交，建議 30 分鐘內先回一句，並多用常用回覆範本。`);
   else if (R.answered >= 5 && prevResponse.totals.median && R.median > prevResponse.totals.median * 1.5 && R.median > 20) suggestions.push(`客服回覆變慢了（${formatMinutes(prevResponse.totals.median)} → ${formatMinutes(R.median)}），請確認人手是否足夠。`);
   if (R.over4h) suggestions.push(`有 ${R.over4h} 次讓客人等超過 4 小時才回覆。`);
   for (const b of targets.brands) {
@@ -150,7 +150,7 @@ export function formatWeekly(d) {
     `👥 客人 ${T.customers} 位（回頭客 ${T.repeat_customers}）`,
     T.receivable ? `⏳ 待收款 ${money(T.receivable)}（${T.receivable_orders} 筆）` : '',
     `💬 新詢問 ${F.leads} 位${changeText(F.leads, d.prevFunnel.leads)}，成交 ${F.won} 位（成交率 ${pctText(F.rate)}）`,
-    d.response?.answered ? `⏱ 客服回覆中位數 ${formatMinutes(d.response.median)}（1 小時內 ${pctText(d.response.within1h)}）` : '',
+    d.response?.answered ? `⏱ 客服回覆中位數約 ${formatMinutes(d.response.median)}（1 小時內 ${pctText(d.response.within1h)}）` : '',
     d.targets?.total.target ? `🎯 本月目標達成 ${pctText(d.targets.total.progress)}，預估月底 ${pctText(d.targets.total.projectedRate)}` : '',
   ];
   const active = d.brands.filter((b) => b.revenue || b.prevRevenue || b.leads || b.orders);

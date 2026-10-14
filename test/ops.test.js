@@ -32,34 +32,39 @@ test('營業時間內的等待分鐘數（跨夜不算）', () => {
   assert.equal(businessMinutes(tw('2026-10-14', '20:00'), tw('2026-10-15', '10:00'), 'Asia/Taipei', [0, 24]), 840);
 });
 
-test('客服回覆速度：在後台回覆或按已回覆都算；連續訊息只算第一則；自動訊息不算', () => {
+test('客服回覆速度：後台回覆或按已回覆是精確時間；客人隔 10 分鐘以上再傳訊息推定客服回覆過（估計）', () => {
   const store = openDb(':memory:');
   const a = store.createBrand({ slug: 'a', name: '享運' });
-  const c1 = store.upsertLineCustomer(a.id, 'U1', { displayName: '小美' });
-  const c2 = store.upsertLineCustomer(a.id, 'U2', { displayName: '阿明' });
-  const c3 = store.upsertLineCustomer(a.id, 'U3', { displayName: '小華' });
+  const cust = (uid) => store.upsertLineCustomer(a.id, uid, { displayName: uid });
+  const [c1, c2, c3, c4, c5] = ['U1', 'U2', 'U3', 'U4', 'U5'].map(cust);
   const msg = (c, dir, at, staff = null) => store.run('INSERT INTO messages (customer_id, direction, text, created_at, staff_name) VALUES (?, ?, ?, ?, ?)', c.id, dir, 'x', at, staff);
   const d = '2026-10-14';
   msg(c1, 'in', tw(d, '10:00'));
-  msg(c1, 'in', tw(d, '10:05'));
-  msg(c1, 'out', tw(d, '10:10'), '系統自動');
-  msg(c1, 'out', tw(d, '10:20'), '小艾'); // 20 分鐘
+  msg(c1, 'in', tw(d, '10:05')); // 同一串，不算回覆
+  msg(c1, 'out', tw(d, '10:10'), '系統自動'); // 自動訊息不算
+  msg(c1, 'out', tw(d, '10:20'), '小艾'); // 精確 20 分鐘
   msg(c2, 'in', tw(d, '11:00'));
-  store.run("INSERT INTO activity (at, user_name, action, customer_id) VALUES (?, '阿德', '標記已回覆', ?)", tw(d, '14:00'), c2.id); // 180 分鐘
-  msg(c3, 'in', tw(d, '12:00')); // 尚未回覆
+  store.run("INSERT INTO activity (at, user_name, action, customer_id) VALUES (?, '阿德', '標記已回覆', ?)", tw(d, '14:00'), c2.id); // 精確 180 分鐘
+  msg(c3, 'in', tw(d, '12:00')); // 客人沒再傳 → 無法判斷
+  msg(c4, 'in', tw(d, '13:00'));
+  msg(c4, 'in', tw(d, '13:30')); // 估計 30 分鐘；13:30 這則之後無法判斷
+  msg(c5, 'in', tw(d, '10:00'));
+  msg(c5, 'in', tw('2026-10-15', '15:00')); // 隔天才回話，估計太長 → 不計
   const r = buildResponse(store, config, { from: d, to: d });
-  assert.equal(r.totals.answered, 2);
-  assert.equal(r.totals.pending, 1);
-  assert.equal(r.totals.median, 100);
-  assert.equal(r.totals.within1h, 0.5);
+  assert.equal(r.totals.answered, 3);
+  assert.equal(r.totals.exact, 2);
+  assert.equal(r.totals.estimated, 1);
+  assert.equal(r.totals.unknown, 3);
+  assert.equal(r.totals.median, 30);
+  assert.equal(Math.round(r.totals.within1h * 100), 67);
   const amy = r.byStaff.find((s) => s.name === '小艾');
   assert.equal(amy.replies, 1);
   assert.equal(amy.median, 20);
   assert.equal(amy.messages, 1);
-  assert.equal(amy.leads, 1, '小美是小艾負責的新詢問');
+  assert.equal(amy.leads, 1, 'U1 是小艾負責的新詢問');
   assert.equal(r.byStaff.find((s) => s.name === '阿德').median, 180);
   assert.ok(!r.byStaff.some((s) => s.name === '系統自動'));
-  assert.ok(r.insights.some((x) => x.includes('尚未回覆')));
+  assert.ok(r.insights[0].includes('1 次是依對話節奏估計'));
 });
 
 test('營收目標：沿用上個月、進度、月底預估', () => {

@@ -1,4 +1,4 @@
-import { addDays, dateOf, diffDays, formatDateTime, today } from './dates.js';
+import { addDays, dateOf, diffDays, today } from './dates.js';
 import { SERVICE_TYPES } from './db.js';
 import { leadsToFollowUp } from './leads.js';
 import { customerStats } from './profile.js';
@@ -9,7 +9,6 @@ import { customerStats } from './profile.js';
 //   1 客戶已回報匯款，待核對
 //   1 未匯款且已逾期
 //   1 未匯款，今天到期
-//   1 客戶傳訊息尚未處理
 //   1 今天用車，還沒派車
 //   2 明天用車，還沒傳行程確認
 //   2 未匯款，明天到期
@@ -94,9 +93,7 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
       }
     }
 
-    if (c.last_inbound_at && (!c.last_handled_at || c.last_inbound_at > c.last_handled_at)) {
-      reasons.push({ code: 'unreplied', priority: 1, label: '有訊息尚未處理', detail: `最後訊息 ${formatDateTime(c.last_inbound_at, tz)}`, action: 'reply' });
-    }
+    // 未回覆的訊息不列入：客服在 LINE 官方帳號 App 回覆時 LINE 不會通知本系統，App 本身就有未讀標示
 
     if (c.next_contact_date && c.next_contact_date <= t) {
       reasons.push({ code: 'scheduled', priority: 2, label: '排定今天聯絡', detail: `排定日期 ${c.next_contact_date}${c.note ? `｜備註：${c.note}` : ''}`, action: 'care' });

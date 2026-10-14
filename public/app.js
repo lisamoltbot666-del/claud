@@ -1170,23 +1170,23 @@ async function loadResponse(from, to) {
   const t = r.totals;
   $('#response-section').innerHTML = `
     <h2 style="margin-top:28px">客服回覆速度與績效</h2>
-    <p class="muted">客人傳訊息後，到客服在後台回覆或按「已回覆」的時間；只計算營業時間 ${r.businessHours[0]}–${r.businessHours[1]} 點。客服若在 LINE 官方帳號 App 直接回覆，請記得在後台按「已回覆」，才算得到時間。</p>
+    <p class="muted">客人傳訊息後多久得到回覆，只計算營業時間 ${r.businessHours[0]}–${r.businessHours[1]} 點。客服在 LINE 官方帳號 App 回覆時 LINE 不會通知本系統，所以依對話節奏估計：客人隔 10 分鐘以上又傳訊息，就當作中間客服回覆過（估計值會比實際稍長）。客服在後台傳訊息或按「已回覆」的是精確時間，並記在該客服名下（不按也沒關係）。適合看趨勢，不適合精準考核。</p>
     <div class="tiles">
-      <div class="tile"><div class="label">回覆時間（中位數）</div><div class="value">${fmtMin(t.median)}</div><div class="sub">共 ${t.answered} 次回覆</div></div>
+      <div class="tile"><div class="label">回覆時間（中位數）</div><div class="value">${t.median == null ? '—' : `約 ${fmtMin(t.median)}`}</div><div class="sub">共 ${t.answered} 次回覆</div></div>
       <div class="tile"><div class="label">1 小時內回覆</div><div class="value">${pct(t.within1h)}</div><div class="sub">&nbsp;</div></div>
       <div class="tile"><div class="label">等超過 4 小時</div><div class="value">${t.over4h}</div><div class="sub">次</div></div>
-      <div class="tile"><div class="label">尚未回覆</div><div class="value">${t.pending}</div><div class="sub">段對話</div></div>
+      <div class="tile"><div class="label">精確／估計</div><div class="value">${t.exact}／${t.estimated}</div><div class="sub">無法判斷 ${t.unknown} 段</div></div>
     </div>
     ${r.insights.length ? `<div class="card" style="margin-top:12px;border-left:4px solid var(--blue)"><strong>建議</strong><ul style="margin:6px 0 0;padding-left:20px">${r.insights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px">
-      <div><h3>各客服</h3><div class="table-wrap"><table><thead><tr><th>客服</th><th>回覆</th><th>中位數</th><th>1 小時內</th><th>傳送訊息</th><th>負責詢問</th><th>成交</th></tr></thead><tbody>
+      <div><h3>各客服 <span class="muted" style="font-weight:normal;font-size:13px">（只含在後台回覆或按「已回覆」的紀錄）</span></h3><div class="table-wrap"><table><thead><tr><th>客服</th><th>回覆</th><th>中位數</th><th>1 小時內</th><th>傳送訊息</th><th>負責詢問</th><th>成交</th></tr></thead><tbody>
         ${r.byStaff.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.replies}</td><td>${fmtMin(x.median)}</td><td>${x.replies ? pct(x.within1h) : '—'}</td><td>${x.messages}</td><td>${x.leads}</td><td>${x.won}${x.leads ? `<div class="muted">${pct(x.rate)}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">這段期間沒有回覆紀錄</td></tr>'}
       </tbody></table></div></div>
-      <div><h3>各品牌</h3><div class="table-wrap"><table><thead><tr><th>品牌</th><th>對話</th><th>中位數</th><th>1 小時內</th><th>尚未回覆</th></tr></thead><tbody>
-        ${r.byBrand.map((b) => `<tr><td>${brandTag(b.brand_id)}</td><td>${b.waits}</td><td>${fmtMin(b.median)}</td><td>${b.answered ? pct(b.within1h) : '—'}</td><td>${b.pending}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">—</td></tr>'}
+      <div><h3>各品牌</h3><div class="table-wrap"><table><thead><tr><th>品牌</th><th>回覆</th><th>中位數</th><th>1 小時內</th><th>無法判斷</th></tr></thead><tbody>
+        ${r.byBrand.map((b) => `<tr><td>${brandTag(b.brand_id)}</td><td>${b.waits}</td><td>${fmtMin(b.median)}</td><td>${b.answered ? pct(b.within1h) : '—'}</td><td>${b.unknown}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">—</td></tr>'}
       </tbody></table></div></div>
     </div>
-    ${r.byHour.length ? `<h3>客人傳訊時段</h3><div class="table-wrap"><table><thead><tr><th>時段</th><th>對話</th><th>回覆中位數</th><th style="width:40%"></th></tr></thead><tbody>
+    ${r.byHour.length ? `<h3>客人傳訊時段</h3><div class="table-wrap"><table><thead><tr><th>時段</th><th>回覆</th><th>回覆中位數</th><th style="width:40%"></th></tr></thead><tbody>
       ${(() => { const max = Math.max(1, ...r.byHour.map((h) => h.median || 0)); return r.byHour.map((h) => `<tr><td>${h.hour}:00–${h.hour + 1}:00</td><td>${h.waits}</td><td>${fmtMin(h.median)}</td><td>${h.median != null ? meterBar(h.median / max) : ''}</td></tr>`).join(''); })()}
     </tbody></table></div>` : ''}`;
 }
