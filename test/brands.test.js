@@ -191,7 +191,8 @@ test('轉送：已驗證的 Webhook 原封不動轉給舊系統；舊系統掛�
 
   const { store, a, b } = twoBrands();
   const lines = fakeLines();
-  const server = http.createServer(createApp({ store, lines, config, logger: silent }));
+  // 開啟自動回覆，確認有轉送的品牌仍不回覆
+  const server = http.createServer(createApp({ store, lines, config: { ...config, autoReply: true }, logger: silent }));
   await new Promise((r) => server.listen(0, r));
   t.after(() => server.close());
   const base = `http://localhost:${server.address().port}`;

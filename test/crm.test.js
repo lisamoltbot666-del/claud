@@ -96,7 +96,12 @@ test('關懷清單：新好友未下單、未回覆訊息', () => {
 
 test('Webhook：加好友自動建檔、封鎖、匯款回報、查訂單', async () => {
   const { store, line, lines } = setup();
-  const wh = new WebhookHandler({ store, lines, logger: silent });
+  const quiet = new WebhookHandler({ store, lines, logger: silent });
+  await quiet.handle(store.getBrand(B), { events: [{ type: 'message', source: { type: 'user', userId: 'UQ' }, replyToken: 'rq', message: { type: 'text', text: '查訂單' } }] });
+  assert.equal(line.replies.length, 0, '預設不自動回覆客人');
+  assert.equal(store.listMessages(store.getCustomerByLineId(B, 'UQ').id).length, 1, '但訊息照常記錄');
+
+  const wh = new WebhookHandler({ store, lines, logger: silent, autoReply: true });
   const brand = store.getBrand(B);
   const src = { type: 'user', userId: 'U1' };
 

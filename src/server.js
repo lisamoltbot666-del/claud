@@ -111,7 +111,7 @@ export function ensureInitialBrands(store, config, logger = console) {
 }
 
 export function createApp({ store, lines = new LineRegistry(), config, logger = console, fetchImpl = globalThis.fetch }) {
-  const webhook = new WebhookHandler({ store, lines, logger });
+  const webhook = new WebhookHandler({ store, lines, logger, autoReply: config.autoReply });
   const reminders = new ReminderService({ store, lines, config, logger });
 
   const toId = (v) => {
