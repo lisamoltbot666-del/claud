@@ -205,8 +205,17 @@ export function openDb(dbPath) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === 'staff_name')) db.exec(`ALTER TABLE ${table} ADD COLUMN staff_name TEXT`);
   }
   // 訂單指派的司機、派車單送出時間
-  for (const col of ['driver_id INTEGER', 'dispatched_at TEXT']) {
+  // 指派當下司機與車輛的資料（之後司機換車、改電話，舊訂單仍保留當時的紀錄）
+  for (const col of ['driver_id INTEGER', 'dispatched_at TEXT', 'driver_name_snap TEXT', 'driver_phone_snap TEXT', 'driver_plate_snap TEXT', 'driver_car_snap TEXT']) {
     if (!db.prepare('PRAGMA table_info(orders)').all().some((r) => r.name === col.split(' ')[0])) db.exec(`ALTER TABLE orders ADD COLUMN ${col}`);
+  }
+  // 舊版已指派司機的訂單：補上當時的司機資料
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'drivers'").get()) {
+    db.exec(`UPDATE orders SET driver_name_snap = (SELECT name FROM drivers d WHERE d.id = orders.driver_id),
+      driver_phone_snap = (SELECT phone FROM drivers d WHERE d.id = orders.driver_id),
+      driver_plate_snap = (SELECT plate FROM drivers d WHERE d.id = orders.driver_id),
+      driver_car_snap = (SELECT car_model FROM drivers d WHERE d.id = orders.driver_id)
+      WHERE driver_id IS NOT NULL AND driver_name_snap IS NULL`);
   }
   // 匯入的訂單記錄來源編號，重複匯入同一份檔案時不會重複建立
   if (!db.prepare('PRAGMA table_info(orders)').all().some((r) => r.name === 'import_ref')) db.exec('ALTER TABLE orders ADD COLUMN import_ref TEXT');
@@ -463,7 +472,9 @@ export class Store {
     if (status) { where.push('o.status = ?'); params.push(status); }
     if (customerId) { where.push('o.customer_id = ?'); params.push(customerId); }
     return this.all(
-      `SELECT o.*, c.display_name, c.real_name, c.line_user_id, c.brand_id, d.name AS driver_name, d.plate AS driver_plate
+      `SELECT o.*, c.display_name, c.real_name, c.line_user_id, c.brand_id,
+         COALESCE(o.driver_name_snap, d.name) AS driver_name, COALESCE(o.driver_plate_snap, d.plate) AS driver_plate,
+         COALESCE(o.driver_car_snap, d.car_model) AS driver_car, COALESCE(o.driver_phone_snap, d.phone) AS driver_phone
        FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN drivers d ON d.id = o.driver_id
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY o.order_date DESC, o.id DESC`,

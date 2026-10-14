@@ -92,3 +92,27 @@ test('HTTP：LINE 傳派車單給司機、傳司機資訊給客人；司機不�
   const board = (await call(`/api/dispatch?from=${T}&to=${addDays(T, 3)}`)).data;
   assert.equal(board.orders.length, 2);
 });
+
+test('客戶紀錄保留當時的司機與車輛；司機換車後舊訂單不變；可用車號搜尋', async () => {
+  const { store, c, paid, unpaid } = setup();
+  const { driverHistory } = await import('../src/dispatch.js');
+  const { search } = await import('../src/search.js');
+  const d = saveDriver(store, null, { name: '王大明', phone: '0933', plate: 'ABC-1234', car_model: 'Alphard' });
+  assignDriver(store, paid.id, d.id);
+  store.updateOrder(paid.id, { status: 'completed' });
+  saveDriver(store, d.id, { plate: 'XYZ-9999', car_model: 'Previa' }); // 司機換車
+  assignDriver(store, unpaid.id, d.id);
+
+  const orders = store.listOrders({ customerId: c.id });
+  const old = orders.find((o) => o.id === paid.id);
+  assert.deepEqual([old.driver_name, old.driver_plate, old.driver_car, old.driver_phone], ['王大明', 'ABC-1234', 'Alphard', '0933']);
+  assert.equal(orders.find((o) => o.id === unpaid.id).driver_plate, 'XYZ-9999');
+
+  const hist = driverHistory(store, c.id);
+  assert.deepEqual(hist.map((h) => [h.name, h.plate, h.trips]).sort(), [['王大明', 'ABC-1234', 1], ['王大明', 'XYZ-9999', 1]]);
+  assert.deepEqual(search(store, config, { q: 'ABC-1234' }).orders.map((o) => o.id), [paid.id]);
+
+  assignDriver(store, unpaid.id, null);
+  assert.equal(store.getOrder(unpaid.id).driver_plate_snap, null, '取消指派會清掉');
+  assert.equal(driverHistory(store, c.id).length, 1);
+});

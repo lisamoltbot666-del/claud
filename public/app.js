@@ -259,7 +259,7 @@ $('#order-when').addEventListener('change', () => guard(loadOrders));
 // ---------- customer drawer ----------
 async function openCustomer(id, compose = null) {
   currentCustomerId = id;
-  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity, lead, lostReasons } = await api(`/api/customers/${id}`);
+  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity, lead, lostReasons, drivers } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
   const upcomingTrips = orders.filter((o) => o.service_date && o.service_date >= TODAY && ['pending_payment', 'paid', 'shipped'].includes(o.status));
@@ -295,7 +295,7 @@ async function openCustomer(id, compose = null) {
       <div class="tile"><div class="label">訂單數</div><div class="value">${st.orderCount}</div><div class="sub">已付款 ${st.paidCount} 筆</div></div>
       <div class="tile"><div class="label">累積消費</div><div class="value">${money(st.totalSpent)}</div><div class="sub">${st.pendingAmount ? `待付款 ${money(st.pendingAmount)}` : '&nbsp;'}</div></div>
       <div class="tile"><div class="label">平均客單價</div><div class="value">${money(st.avgOrder)}</div><div class="sub">&nbsp;</div></div>
-      <div class="tile"><div class="label">首次 / 最近用車</div><div class="value" style="font-size:14px">${esc(st.firstOrderDate || '—')}<br>${esc(st.lastOrderDate || '—')}</div><div class="sub">${st.daysSinceLastOrder != null ? `距今 ${st.daysSinceLastOrder} 天` : ''}</div></div>
+      <div class="tile"><div class="label">首次 / 最近用車</div><div class="value" style="font-size:14px">${esc(st.firstOrderDate || '—')}<br>${esc(st.lastOrderDate || '—')}</div><div class="sub">${st.daysSinceLastOrder != null ? (st.daysSinceLastOrder < 0 ? `${-st.daysSinceLastOrder} 天後用車` : st.daysSinceLastOrder === 0 ? '今天用車' : `距今 ${st.daysSinceLastOrder} 天`) : ''}</div></div>
       <div class="tile"><div class="label">回訪週期</div><div class="value">${st.cycle ? `${st.cycle.days} 天` : '—'}</div><div class="sub">${esc(st.cycle?.source || '')}</div></div>
       <div class="tile"><div class="label">預計回訪日</div><div class="value" style="font-size:14px">${esc(st.nextReorderDate || '—')}</div><div class="sub">${reorderIn(st)}</div></div>
       <div class="tile"><div class="label">常用服務</div><div class="value" style="font-size:14px">${st.topItems.map((i) => `${esc(i.name)} <span class="muted">×${i.count}</span>`).join('<br>') || '—'}</div></div>
@@ -311,12 +311,17 @@ async function openCustomer(id, compose = null) {
       <div class="row wide" style="grid-column:1/-1"><button type="submit">儲存資料</button><span class="spacer"></span><button type="button" class="danger small admin-only" id="delete-customer">刪除客戶</button></div>
     </form>
 
+    ${drivers.length ? `<h3>服務過的司機與車輛</h3>
+    <div class="table-wrap"><table><thead><tr><th>司機</th><th>車號</th><th>車型</th><th>電話</th><th>服務次數</th><th>最近一次</th></tr></thead><tbody>
+      ${drivers.map((d) => `<tr><td>${esc(d.name || '')}</td><td>${esc(d.plate || '')}</td><td>${esc(d.car_model || '')}</td><td>${esc(d.phone || '')}</td><td>${d.trips}</td><td>${esc(d.last_date || '')}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+
     <h3>訂單紀錄（${orders.length} 筆）</h3>
     <div class="table-wrap"><table>
       <thead><tr><th>#</th><th>用車</th><th>服務 / 行程</th><th>金額</th><th>狀態</th><th>匯款期限 / 回報</th><th></th></tr></thead>
       <tbody>${orders.map((o) => `<tr>
         <td>${o.id}</td><td>${esc(tripWhen(o)) || '—'}<div class="muted">下單 ${esc(o.order_date)}</div></td>
-        <td>${esc([SERVICES[o.service_type], o.items].filter(Boolean).join(' '))}<div class="muted">${tripRoute(o)}</div>${o.driver_name ? `<div>🚘 ${esc(o.driver_name)}${o.driver_plate ? ` ${esc(o.driver_plate)}` : ''}</div>` : ''}</td><td>${money(o.amount)}</td>
+        <td>${esc([SERVICES[o.service_type], o.items].filter(Boolean).join(' '))}<div class="muted">${tripRoute(o)}</div>${o.driver_name ? `<div>🚘 ${esc(o.driver_name)}${o.driver_plate ? `｜${esc(o.driver_plate)}` : ''}${o.driver_car ? `｜${esc(o.driver_car)}` : ''}</div>` : ''}</td><td>${money(o.amount)}</td>
         <td><select data-order-status="${o.id}">${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}" ${k === o.status ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
         <td>${o.status === 'pending_payment' ? `${esc(o.payment_due_date || '')}${o.payment_report ? `<div class="muted">回報：${esc(o.payment_report)}</div>` : ''}` : `<span class="muted">${o.paid_at ? `入帳 ${fmtTime(o.paid_at)}` : ''}</span>`}</td>
         <td>${o.status === 'pending_payment' ? `<button class="small" data-paid="${o.id}">確認入帳</button>` : ''} ${['cancelled', 'completed'].includes(o.status) ? '' : `<button class="small secondary" data-dispatch="${o.id}">派車</button> `}<button class="small secondary" data-edit-order="${o.id}">編輯</button> <button class="small secondary" data-del-order="${o.id}">刪除</button></td>
