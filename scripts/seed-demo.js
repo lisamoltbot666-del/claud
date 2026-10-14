@@ -50,4 +50,27 @@ store.createOrder(i.id, { order_date: addDays(t, -4), payment_due_date: addDays(
 const a2 = make(rental, 'Udemo-a2', '小美', { real_name: '王小美', phone: '0912-345-678' });
 done(a2, -130, { service_type: 'rental', amount: 3200, items: 'Toyota Yaris', pickup: '台南高鐵站', dropoff: '台南高鐵站', return_date: addDays(t, -128) });
 
+// 過去 30 天的 LINE 詢問：有成交、有未成交（含原因）、也有還在洽談的，讓「詢問與成交」有資料可看
+const asked = (b, uid, name, daysAgo, text) => {
+  const c = store.upsertLineCustomer(b.id, uid, { displayName: name });
+  store.run("INSERT INTO messages (customer_id, direction, text, created_at) VALUES (?, 'in', ?, ?)", c.id, text, new Date(`${addDays(t, -daysAgo)}T04:00:00Z`).toISOString());
+  return c;
+};
+const leadDemo = [
+  [airport, 'Ulead1', '阿哲', 25, '下週六桃機送機多少？', { won: 1300 }],
+  [airport, 'Ulead2', 'Mia', 21, '5 人去松山機場報價', { lost: '價格考量' }],
+  [airport, 'Ulead3', '陳小姐', 18, '凌晨 3 點有車嗎', { lost: '日期／時段沒車' }],
+  [charter, 'Ulead4', 'Kevin', 16, '九份一日包車多少', { won: 6500 }],
+  [charter, 'Ulead5', '林太太', 12, '花蓮兩天包車', { lost: '價格考量' }],
+  [rental, 'Ulead6', 'Tom', 10, '租車需要什麼證件', { lost: '只是詢價比較' }],
+  [airport, 'Ulead7', '小佑', 9, '接機可以舉牌嗎', { won: 1200 }],
+  [rental, 'Ulead8', 'Grace', 8, '週末有休旅車嗎', {}],
+  [charter, 'Ulead9', '張先生', 3, '公司旅遊 20 人', {}],
+];
+for (const [b, uid, name, ago, text, out] of leadDemo) {
+  const c = asked(b, uid, name, ago, text);
+  if (out.won) store.createOrder(c.id, { order_date: addDays(t, -ago + 1), service_date: addDays(t, -ago + 5), amount: out.won, status: 'completed', service_type: b === rental ? 'rental' : b === charter ? 'charter' : 'airport' });
+  if (out.lost) store.run('UPDATE customers SET lead_lost_reason = ?, lead_lost_at = ?, lead_lost_by = ? WHERE id = ?', out.lost, new Date().toISOString(), '示範客服', c.id);
+}
+
 console.log(`已建立示範資料到 ${config.dbPath}`);

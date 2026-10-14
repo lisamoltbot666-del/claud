@@ -118,6 +118,7 @@ async function loadFocus() {
         ${actions.has('payment') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="payment" data-order="${payOrder}">發送匯款提醒</button>` : ''}
         ${actions.has('reorder') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="reorder">發送回訪邀請</button>` : ''}
         ${actions.has('care') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="care">發送關心問候</button>` : ''}
+        ${actions.has('lead') ? `<button class="small secondary" data-compose="${c.id}" data-kind="lead">標記未成交</button>` : ''}
         ${actions.has('birthday') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="birthday">發送生日祝福</button>` : ''}
         ${actions.has('reply') ? `<button class="small secondary" data-handled="${c.id}">標記已回覆</button>` : ''}
         ${actions.has('care') || actions.has('reorder') ? `<button class="small secondary" data-postpone="${c.id}">延後 3 天</button>` : ''}
@@ -258,7 +259,7 @@ $('#order-when').addEventListener('change', () => guard(loadOrders));
 // ---------- customer drawer ----------
 async function openCustomer(id, compose = null) {
   currentCustomerId = id;
-  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity } = await api(`/api/customers/${id}`);
+  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity, lead, lostReasons } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
   const upcomingTrips = orders.filter((o) => o.service_date && o.service_date >= TODAY && ['pending_payment', 'paid', 'shipped'].includes(o.status));
@@ -278,6 +279,15 @@ async function openCustomer(id, compose = null) {
       ${duplicates.map((d) => `<div class="row" style="margin-top:6px"><span class="name" data-open="${d.id}">${esc(nameOf(d))}</span>
         <span class="muted">${esc(d.phone || '')}｜訂單 ${d.order_count} 筆｜${d.line_user_id ? 'LINE 好友' : '非 LINE 好友'}</span><span class="spacer"></span>
         <button class="small" data-merge-in="${d.id}">把這筆合併進來</button></div>`).join('')}
+    </div>` : ''}
+    ${lead ? `<div class="card" id="lead-section" style="margin-top:12px;border-left:4px solid ${lead.status === 'won' ? 'var(--brand)' : lead.status === 'open' ? 'var(--blue)' : 'var(--amber)'}">
+      <strong>詢問狀態：${{ won: '✅ 已成交', open: '💬 洽談中', lost: '未成交', stale: `⚠️ 超過 7 天未成交、未標記原因` }[lead.status]}</strong>
+      <span class="muted">｜${esc(lead.date)} 第一次詢問（${lead.age} 天前）</span>
+      ${lead.status === 'lost' ? `<div style="margin-top:6px">原因：<strong>${esc(lead.reason)}</strong>${lead.note ? `｜${esc(lead.note)}` : ''} <span class="muted">（${esc(lead.by || '')} ${fmtTime(lead.at)}）</span> <button class="small secondary" id="lead-reopen">重新開啟</button></div>` : ''}
+      ${['open', 'stale'].includes(lead.status) ? `<form id="lead-lost" class="row" style="margin-top:8px">
+        <select name="reason" required><option value="">未成交原因…</option>${lostReasons.map((r) => `<option>${esc(r)}</option>`).join('')}</select>
+        <input name="note" placeholder="補充說明（選「其他」時必填）" style="flex:1;min-width:160px">
+        <button type="submit" class="small">標記未成交</button></form>` : ''}
     </div>` : ''}
     <h3>消費總覽</h3>
     <div class="tiles">
@@ -364,6 +374,12 @@ async function openCustomer(id, compose = null) {
   chat.scrollTop = chat.scrollHeight;
 
   $('#close-drawer').onclick = () => dlg.close();
+  if ($('#lead-lost')) $('#lead-lost').onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    await api(`/api/customers/${id}/lead`, { method: 'POST', body: { lost: true, ...Object.fromEntries(new FormData(e.target)) } });
+    toast('已標記未成交'); openCustomer(id);
+  }); };
+  if ($('#lead-reopen')) $('#lead-reopen').onclick = () => guard(async () => { await api(`/api/customers/${id}/lead`, { method: 'POST', body: { lost: false } }); openCustomer(id); });
+  if (compose?.kind === 'lead') $('#lead-section')?.scrollIntoView({ block: 'center' });
   document.querySelectorAll('[data-merge-in]').forEach((b) => b.onclick = () => guard(() => mergeInto(id, Number(b.dataset.mergeIn))));
   $('#merge-search').oninput = () => {
     clearTimeout(mergeTimer);
@@ -443,7 +459,7 @@ async function openCustomer(id, compose = null) {
     e.target.value = '';
   });
   $('#mark-handled').onclick = () => guard(async () => { await api(`/api/customers/${id}/handled`, { method: 'POST' }); toast('已標記'); });
-  if (compose) await applyTemplate(id, compose.kind, compose.orderId);
+  if (compose && compose.kind !== 'lead') await applyTemplate(id, compose.kind, compose.orderId);
 }
 
 async function applyTemplate(customerId, kind, orderId) {
@@ -930,6 +946,54 @@ async function loadReport() {
       ${[...series].reverse().map((m) => `<tr><td>${esc(m.label)}</td><td>${money(m.revenue)}</td><td>${m.orders}</td>${brandsInTable.map((b) => `<td>${m.brands[b.id] ? `${money(m.brands[b.id].revenue)}<div class="muted">${m.brands[b.id].orders} 筆</div>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`).join('')}
     </tbody></table></div>`;
   bindChartTips(series);
+  await loadFunnel(from, to);
+}
+
+// ---------- 詢問與成交分析 ----------
+const LEAD_STATUS = { won: '成交', open: '洽談中', stale: '逾期未標記', lost: '未成交' };
+async function loadFunnel(from, to) {
+  const f = await api(`/api/funnel?${new URLSearchParams({ from, to, g: reportG, ...(currentBrand ? { brand: currentBrand } : {}) })}`);
+  const t = f.totals;
+  const rate = (x) => `${Math.round(x * 100)}%`;
+  const meter = (x) => `<div class="meter" style="width:${Math.max(0, Math.min(1, x)) * 100}%"></div>`;
+  const label = { day: '日期', week: '週', month: '月份' }[f.granularity];
+  $('#report-body').insertAdjacentHTML('beforeend', `
+    <h2 style="margin-top:28px">詢問與成交</h2>
+    <p class="muted">「詢問」＝新客人第一次在 LINE 傳訊息（老客人再來問不算）。之後有訂單＝成交；客服標記原因＝未成交；超過 7 天沒成交也沒標記＝逾期未標記。</p>
+    <div class="tiles">
+      <div class="tile"><div class="label">新詢問</div><div class="value">${t.leads}</div><div class="sub">位客人</div></div>
+      <div class="tile"><div class="label">成交</div><div class="value">${t.won}</div><div class="sub">成交率 ${rate(t.rate)}</div></div>
+      <div class="tile"><div class="label">洽談中</div><div class="value">${t.open}</div><div class="sub">7 天內的詢問</div></div>
+      <div class="tile"><div class="label">未成交</div><div class="value">${t.lost + t.stale}</div><div class="sub">其中未標記原因 ${t.stale}</div></div>
+      <div class="tile"><div class="label">平均成交天數</div><div class="value">${t.avgDaysToWin ?? '—'}</div><div class="sub">詢問到下訂</div></div>
+      <div class="tile"><div class="label">新客營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">這些詢問帶來的</div></div>
+    </div>
+
+    <div class="card" style="margin-top:12px;border-left:4px solid var(--blue)"><strong>營運建議</strong>
+      <ul style="margin:6px 0 0;padding-left:20px">${f.insights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
+
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px">
+      <div><h3>未成交原因</h3><div class="table-wrap"><table><thead><tr><th>原因</th><th>人數</th><th style="width:15%"></th><th>建議</th></tr></thead><tbody>
+        ${f.reasons.map((r) => `<tr><td style="white-space:nowrap">${esc(r.reason)}</td><td style="white-space:nowrap">${r.count}<div class="muted">${rate(r.share)}</div></td><td style="min-width:60px">${meter(r.share)}</td><td class="muted">${esc(r.suggestion)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">沒有未成交的詢問</td></tr>'}
+      </tbody></table></div></div>
+      <div><h3>各品牌成交率</h3><div class="table-wrap"><table><thead><tr><th>品牌</th><th>詢問</th><th>成交</th><th>成交率</th><th style="width:30%"></th></tr></thead><tbody>
+        ${f.byBrand.map((b) => `<tr><td>${brandTag(b.brand_id)}</td><td>${b.leads}</td><td>${b.won}</td><td>${rate(b.rate)}</td><td>${meter(b.rate)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">—</td></tr>'}
+      </tbody></table></div></div>
+    </div>
+
+    <h3>${G_LABEL[f.granularity]}詢問與成交</h3>
+    <div class="table-wrap"><table><thead><tr><th>${label}</th><th>新詢問</th><th>成交</th><th>成交率</th><th>洽談中</th><th>未成交</th><th>新客營業額</th></tr></thead><tbody>
+      ${[...f.series].reverse().filter((b) => b.leads).map((b) => `<tr><td>${esc(b.label)}</td><td>${b.leads}</td><td>${b.won}</td><td>${rate(b.rate)}</td><td>${b.open}</td><td>${b.lost + b.stale}</td><td>${money(b.revenue)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">這段期間沒有新詢問</td></tr>'}
+    </tbody></table></div>
+
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px">
+      <div><h3>星期幾的詢問</h3><div class="table-wrap"><table><thead><tr><th>星期</th><th>詢問</th><th>成交</th><th>成交率</th></tr></thead><tbody>
+        ${[1, 2, 3, 4, 5, 6, 0].map((i) => f.weekdays[i]).map((w) => `<tr><td>星期${w.day}</td><td>${w.leads}</td><td>${w.won}</td><td>${w.leads ? rate(w.won / w.leads) : '—'}</td></tr>`).join('')}
+      </tbody></table></div></div>
+      <div><h3>待追蹤的詢問</h3><div class="table-wrap"><table><thead><tr><th>客人</th><th>詢問日</th><th>狀態</th></tr></thead><tbody>
+        ${f.followUp.map((l) => `<tr class="clickable" data-compose="${l.id}" data-kind="lead"><td>${brandTag(l.brand_id)}${esc(l.name || '')}</td><td>${esc(l.date)}<div class="muted">${l.age} 天前</div></td><td>${LEAD_STATUS[l.status]}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">都處理好了 🎉</td></tr>'}
+      </tbody></table></div></div>
+    </div>`);
 }
 
 // ---------- 常用回覆範本 ----------

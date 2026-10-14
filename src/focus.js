@@ -1,5 +1,6 @@
 import { addDays, dateOf, diffDays, formatDateTime, today } from './dates.js';
 import { SERVICE_TYPES } from './db.js';
+import { leadsToFollowUp } from './leads.js';
 import { customerStats } from './profile.js';
 
 // 產生「今日關懷清單」：哪些客戶今天需要客服特別關心、為什麼、建議做什麼
@@ -55,6 +56,9 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
     const r = store.lastReminder(customerId, kind, orderId);
     return r && dateOf(r.sent_at, tz) > cooldownStart ? r : null;
   };
+
+  // 詢問後還沒成交、也沒標記未成交的客人
+  const leadFollow = new Map(leadsToFollowUp(store, config, { brandId }).map((l) => [l.customer.id, l]));
 
   const result = [];
   for (const c of customers) {
@@ -112,7 +116,13 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
       reasons.push({ code: 'birthday', priority: 2, label: '今天生日 🎂', detail: '', action: 'birthday' });
     }
 
-    if (!list.length && !snoozed && c.is_friend && c.followed_at && dateOf(c.followed_at, tz) >= addDays(t, -config.newFriendDays) && !recentlyReminded(c.id, 'care')) {
+    const lead = leadFollow.get(c.id);
+    if (lead && !snoozed) {
+      reasons.push({ code: 'lead_follow', priority: 2, label: `詢問 ${lead.age} 天尚未成交`, detail: `${lead.date} 第一次詢問｜追蹤一下，或標記未成交原因`, action: 'lead' });
+    }
+
+    // 加了好友但從沒傳過訊息的新朋友（有傳過訊息的由上面「詢問」追蹤）
+    if (!list.length && !snoozed && !c.last_inbound_at && c.is_friend && c.followed_at && dateOf(c.followed_at, tz) >= addDays(t, -config.newFriendDays) && !recentlyReminded(c.id, 'care')) {
       reasons.push({ code: 'new_friend', priority: 3, label: '新好友尚未下單', detail: `加入日期 ${dateOf(c.followed_at, tz)}`, action: 'care' });
     }
 

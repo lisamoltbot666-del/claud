@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS ${name} (
   unfollowed_at TEXT,
   last_inbound_at TEXT,          -- 客戶最後傳訊時間
   last_handled_at TEXT,          -- 客服最後回覆 / 標記已處理時間
+  lead_lost_reason TEXT,         -- 詢問未成交原因（客服標記）
+  lead_lost_note TEXT,
+  lead_lost_at TEXT,
+  lead_lost_by TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -191,6 +195,11 @@ export function openDb(dbPath) {
   db.exec(customersTable('customers'));
   migrateTripColumns(db);
   db.exec(SCHEMA);
+  // 詢問未成交原因
+  {
+    const cols = new Set(db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name));
+    for (const col of ['lead_lost_reason', 'lead_lost_note', 'lead_lost_at', 'lead_lost_by']) if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
+  }
   // 對話、提醒記錄由哪位客服送出
   for (const table of ['messages', 'reminders']) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === 'staff_name')) db.exec(`ALTER TABLE ${table} ADD COLUMN staff_name TEXT`);
