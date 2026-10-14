@@ -7,6 +7,8 @@ mark { background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; 
 .result-group h3 { margin-top: 18px; }
 :root {
   --series-1: #2a78d6;
+  /* 品牌比較用的類別色（已驗證色盲可辨）；依品牌固定順序分配 */
+  --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100; --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
   --bg: #f5f6f8;
   --card: #fff;
   --text: #1f2328;
@@ -20,7 +22,7 @@ mark { background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; 
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111418; --card: #1b1f24; --text: #e6e8eb; --muted: #9aa3ad; --line: #2c333b; --series-1: #3987e5; }
+  :root { --bg: #111418; --card: #1b1f24; --text: #e6e8eb; --muted: #9aa3ad; --line: #2c333b; --series-1: #3987e5; --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); }
@@ -122,3 +124,12 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .chart .value-label { fill: var(--text); font-size: 11px; font-weight: 600; }
 .chart-tip { position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.12); white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); }
 .meter { height: 6px; border-radius: 3px; background: var(--series-1); min-width: 2px; }
+
+.brand-check { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 4px; border: 1px solid var(--line); border-radius: 14px; cursor: pointer; user-select: none; }
+.brand-check input { margin: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; margin-bottom: 6px; }
+.legend .swatch { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .dot { stroke: var(--card); stroke-width: 2; }
+.chart .end-label { fill: var(--text); font-size: 11px; }

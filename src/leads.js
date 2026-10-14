@@ -24,14 +24,15 @@ const SUGGESTIONS = {
 };
 
 /** 所有「詢問」：每位 LINE 客人第一次傳訊息的時間，以及之後是否成交 */
-function allLeads(store, config, { brandId = null } = {}) {
+function allLeads(store, config, { brandId = null, brandIds = null } = {}) {
+  const ids = brandIds?.length ? brandIds : brandId ? [brandId] : null;
   const tz = config.tz;
   const t = today(tz);
   const internal = store.internalIds();
   const firsts = store.all(
     `SELECT m.customer_id, MIN(m.created_at) AS first_at FROM messages m JOIN customers c ON c.id = m.customer_id
-     WHERE m.direction = 'in' AND c.line_user_id IS NOT NULL${brandId ? ' AND c.brand_id = ?' : ''} GROUP BY m.customer_id`,
-    ...(brandId ? [brandId] : []),
+     WHERE m.direction = 'in' AND c.line_user_id IS NOT NULL${ids ? ` AND c.brand_id IN (${ids.map(() => '?').join(',')})` : ''} GROUP BY m.customer_id`,
+    ...(ids || []),
   );
   const leads = [];
   for (const f of firsts) {
@@ -95,15 +96,15 @@ const summarize = (list) => {
   };
 };
 
-export function buildFunnel(store, config, { from, to, brandId = null, granularity = 'auto' }) {
+export function buildFunnel(store, config, { from, to, brandId = null, brandIds = null, granularity = 'auto' }) {
   if (from > to) [from, to] = [to, from];
   const g = resolveGranularity(granularity, from, to);
-  const leads = allLeads(store, config, { brandId }).filter((l) => l.date >= from && l.date <= to);
+  const leads = allLeads(store, config, { brandId, brandIds }).filter((l) => l.date >= from && l.date <= to);
   const totals = summarize(leads);
 
   const series = listBuckets(from, to, g).map((b) => ({ ...b, ...summarize(leads.filter((l) => bucketKey(l.date, g) === b.key)) }));
-  const brandIds = [...new Set(leads.map((l) => l.brand_id))];
-  const byBrand = brandIds.map((id) => ({ brand_id: id, ...summarize(leads.filter((l) => l.brand_id === id)) })).sort((a, b) => b.leads - a.leads);
+  const seenBrands = [...new Set(leads.map((l) => l.brand_id))];
+  const byBrand = seenBrands.map((id) => ({ brand_id: id, ...summarize(leads.filter((l) => l.brand_id === id)) })).sort((a, b) => b.leads - a.leads);
 
   const notWon = leads.filter((l) => l.status === 'lost' || l.status === 'stale');
   const reasons = [...LOST_REASONS, UNMARKED]

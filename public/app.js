@@ -829,6 +829,88 @@ async function openDispatch(orderId) {
 
 // ---------- 營收報表 ----------
 let reportRange = 'month';
+// 報表自己的品牌勾選（不影響其他頁面）；空陣列 = 全部品牌
+let reportBrands = (() => { try { return JSON.parse(prefs.get('reportBrands') || '[]'); } catch { return []; } })();
+const brandSlot = (id) => (BRANDS.findIndex((b) => b.id === Number(id)) % 8) + 1; // 顏色跟著品牌固定，不隨勾選變動
+function selectedReportBrands() {
+  const valid = reportBrands.filter((id) => brandOf(id));
+  return valid.length ? valid : BRANDS.map((b) => b.id);
+}
+function renderReportBrands() {
+  const sel = new Set(selectedReportBrands());
+  const all = sel.size === BRANDS.length;
+  $('#report-brands').innerHTML = `<span class="muted">品牌：</span>
+    <label class="brand-check"><input type="checkbox" data-rb="all" ${all ? 'checked' : ''}> 全部</label>
+    ${BRANDS.map((b) => `<label class="brand-check"><input type="checkbox" data-rb="${b.id}" ${sel.has(b.id) ? 'checked' : ''}>${brandTag(b.id)}</label>`).join('')}`;
+  document.querySelectorAll('[data-rb]').forEach((cb) => cb.onchange = () => {
+    if (cb.dataset.rb === 'all') reportBrands = [];
+    else {
+      const next = new Set(selectedReportBrands());
+      if (cb.checked) next.add(Number(cb.dataset.rb)); else next.delete(Number(cb.dataset.rb));
+      if (!next.size) { toast('至少要選一個品牌', true); cb.checked = true; return; }
+      reportBrands = next.size === BRANDS.length ? [] : [...next];
+    }
+    prefs.set('reportBrands', JSON.stringify(reportBrands));
+    guard(loadReport);
+  });
+}
+const reportBrandParams = () => (reportBrands.filter((id) => brandOf(id)).length ? { brands: selectedReportBrands().join(',') } : {});
+
+// 多品牌比較：每個品牌一條營業額趨勢線；圖例＋線尾品牌名；滑過顯示該區間各品牌數字
+function brandTrendChart(series, ids) {
+  const W = 720; const H = 240; const top = 16; const bottom = 26; const left = 8; const right = 70;
+  const vals = series.flatMap((b) => ids.map((id) => b.brands[id]?.revenue || 0));
+  const max = Math.max(1, ...vals);
+  const n = series.length;
+  const x = (i) => left + (n === 1 ? (W - left - right) / 2 : ((W - left - right) * i) / (n - 1));
+  const y = (v) => top + (H - top - bottom) * (1 - v / max);
+  const every = Math.ceil(n / 12);
+  const short = (v) => (v >= 10000 ? `${Math.round(v / 1000) / 10}萬` : v.toLocaleString());
+  // 線尾標籤避免重疊：依 y 排序後至少相隔 13px
+  const ends = ids.map((id) => ({ id, y: y(series.at(-1).brands[id]?.revenue || 0) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 13);
+  return `<div class="legend">${ids.map((id) => `<span><span class="swatch" style="background:var(--cat-${brandSlot(id)})"></span>${esc(brandOf(id)?.name || '')}</span>`).join('')}</div>
+  <div class="chart" id="brand-chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="各品牌營業額趨勢">
+    <line class="gridline" x1="${left}" x2="${W - right}" y1="${H - bottom}" y2="${H - bottom}"/>
+    <line class="gridline" x1="${left}" x2="${W - right}" y1="${y(max)}" y2="${y(max)}" stroke-dasharray="2 4"/>
+    <text class="axis-label" x="${W - right}" y="${y(max) - 4}" text-anchor="end">NT$${short(max)}</text>
+    ${series.map((b, i) => (i % every === 0 ? `<text class="axis-label" x="${x(i)}" y="${H - 8}" text-anchor="middle">${esc(b.tick)}</text>` : '')).join('')}
+    ${ids.map((id) => `<polyline class="line" style="stroke:var(--cat-${brandSlot(id)})" points="${series.map((b, i) => `${x(i)},${y(b.brands[id]?.revenue || 0)}`).join(' ')}"/>`).join('')}
+    ${ends.map((e) => `<text class="end-label" x="${W - right + 6}" y="${e.y + 4}">${esc(brandOf(e.id)?.name || '')}</text>`).join('')}
+    <g class="hover" visibility="hidden"><line class="crosshair" y1="${top}" y2="${H - bottom}"/>${ids.map((id) => `<circle class="dot" r="4" data-id="${id}" style="fill:var(--cat-${brandSlot(id)})"/>`).join('')}</g>
+    <rect class="hit" x="${left}" y="${top}" width="${W - left - right}" height="${H - top - bottom}" fill="transparent"/>
+  </svg><div class="chart-tip" hidden></div></div>`;
+}
+function bindBrandChart(series, ids) {
+  const chart = $('#brand-chart');
+  if (!chart) return;
+  const svg = chart.querySelector('svg');
+  const tip = chart.querySelector('.chart-tip');
+  const hover = svg.querySelector('.hover');
+  const hit = svg.querySelector('.hit');
+  const n = series.length;
+  const W = 720; const H = 240; const top = 16; const bottom = 26; const left = 8; const right = 70;
+  const max = Math.max(1, ...series.flatMap((b) => ids.map((id) => b.brands[id]?.revenue || 0)));
+  const xAt = (i) => left + (n === 1 ? (W - left - right) / 2 : ((W - left - right) * i) / (n - 1));
+  const yAt = (v) => top + (H - top - bottom) * (1 - v / max);
+  hit.addEventListener('mousemove', (e) => {
+    const box = svg.getBoundingClientRect();
+    const sx = ((e.clientX - box.left) / box.width) * W;
+    const i = Math.max(0, Math.min(n - 1, Math.round(((sx - left) / (W - left - right)) * (n - 1))));
+    const b = series[i];
+    hover.setAttribute('visibility', 'visible');
+    hover.querySelector('.crosshair').setAttribute('x1', xAt(i));
+    hover.querySelector('.crosshair').setAttribute('x2', xAt(i));
+    hover.querySelectorAll('.dot').forEach((d) => { d.setAttribute('cx', xAt(i)); d.setAttribute('cy', yAt(b.brands[d.dataset.id]?.revenue || 0)); });
+    const rows = ids.map((id) => ({ id, v: b.brands[id]?.revenue || 0, o: b.brands[id]?.orders || 0 })).sort((a, c) => c.v - a.v);
+    tip.innerHTML = `<strong>${esc(b.label)}</strong>${rows.map((r) => `<div><span class="swatch" style="display:inline-block;width:10px;height:3px;background:var(--cat-${brandSlot(r.id)});vertical-align:middle;margin-right:4px"></span>${esc(brandOf(r.id)?.name || '')} ${money(r.v)} <span class="muted">${r.o} 筆</span></div>`).join('')}`;
+    const host = chart.getBoundingClientRect();
+    tip.style.left = `${(xAt(i) / W) * box.width + box.left - host.left}px`;
+    tip.style.top = `${(top / H) * box.height + box.top - host.top + 20}px`;
+    tip.hidden = false;
+  });
+  hit.addEventListener('mouseleave', () => { hover.setAttribute('visibility', 'hidden'); tip.hidden = true; });
+}
 let reportG = 'auto';
 const G_LABEL = { day: '每日', week: '每週', month: '每月' };
 const pct = (x) => `${Math.round(x * 100)}%`;
@@ -914,12 +996,14 @@ function bindChartTips(monthly) {
 
 async function loadReport() {
   const [from, to] = reportPeriod();
-  const r = await api(`/api/report?${new URLSearchParams({ from, to, g: reportG, ...(currentBrand ? { brand: currentBrand } : {}) })}`);
+  renderReportBrands();
+  const ids = selectedReportBrands();
+  const r = await api(`/api/report?${new URLSearchParams({ from, to, g: reportG, ...reportBrandParams() })}`);
   // 圖表刻度：日 → 10/15、週 → 10/13、月 → 10月
   const series = r.series.map((b) => ({ ...b, tick: r.granularity === 'month' ? `${Number(b.key.slice(5))}月` : `${Number(b.key.slice(5, 7))}/${Number(b.key.slice(8))}` }));
   const t = r.totals;
   const maxBrand = Math.max(1, ...r.byBrand.map((b) => b.revenue));
-  const brandsInTable = BRANDS.filter((b) => !currentBrand || String(b.id) === String(currentBrand));
+  const brandsInTable = BRANDS.filter((b) => ids.includes(b.id));
   $('#report-body').innerHTML = `
     <p class="muted">期間：${esc(r.from)} ～ ${esc(r.to)}</p>
     <div class="tiles">
@@ -933,6 +1017,7 @@ async function loadReport() {
 
     <h3>${G_LABEL[r.granularity]}營業額</h3>
     <div class="card">${revenueChart(series)}</div>
+    ${ids.length >= 2 ? `<h3>各品牌比較（${G_LABEL[r.granularity]}營業額）</h3><div class="card">${brandTrendChart(series, ids)}</div>` : ''}
 
     <h3>各品牌</h3>
     <div class="table-wrap"><table><thead><tr><th>品牌</th><th>營業額</th><th></th><th>訂單</th><th>客人</th><th>回頭客比例</th><th>待收款</th></tr></thead><tbody>
@@ -951,13 +1036,14 @@ async function loadReport() {
       ${[...series].reverse().map((m) => `<tr><td>${esc(m.label)}</td><td>${money(m.revenue)}</td><td>${m.orders}</td>${brandsInTable.map((b) => `<td>${m.brands[b.id] ? `${money(m.brands[b.id].revenue)}<div class="muted">${m.brands[b.id].orders} 筆</div>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`).join('')}
     </tbody></table></div>`;
   bindChartTips(series);
+  if (ids.length >= 2) bindBrandChart(series, ids);
   await loadFunnel(from, to);
 }
 
 // ---------- 詢問與成交分析 ----------
 const LEAD_STATUS = { won: '成交', open: '洽談中', stale: '逾期未標記', lost: '未成交' };
 async function loadFunnel(from, to) {
-  const f = await api(`/api/funnel?${new URLSearchParams({ from, to, g: reportG, ...(currentBrand ? { brand: currentBrand } : {}) })}`);
+  const f = await api(`/api/funnel?${new URLSearchParams({ from, to, g: reportG, ...reportBrandParams() })}`);
   const t = f.totals;
   const rate = (x) => `${Math.round(x * 100)}%`;
   const meter = (x) => `<div class="meter" style="width:${Math.max(0, Math.min(1, x)) * 100}%"></div>`;
