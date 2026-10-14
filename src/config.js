@@ -34,5 +34,10 @@ export function getConfig(env = process.env) {
     autoReorderReminder: bool(env.AUTO_REORDER_REMINDER),
     bankInfo: env.BANK_INFO || '',
     shopName: env.SHOP_NAME || '本店',
+    // 預先建立的品牌：「代號:名稱:顏色」以逗號分隔，例如 lumi:璐米:#d6336c,lijie:利捷
+    initialBrands: (env.INITIAL_BRANDS || '').split(',').map((s) => s.trim()).filter(Boolean).map((item) => {
+      const [slug, name, color] = item.split(':').map((s) => s.trim());
+      return { slug, name: name || slug, ...(color ? { color } : {}) };
+    }),
   };
 }

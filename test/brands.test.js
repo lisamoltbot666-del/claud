@@ -11,7 +11,7 @@ import { addDays, today } from '../src/dates.js';
 import { openDb } from '../src/db.js';
 import { buildFocusList, formatFocusSummary } from '../src/focus.js';
 import { ReminderService } from '../src/reminders.js';
-import { bootstrapBrandFromEnv, createApp } from '../src/server.js';
+import { bootstrapBrandFromEnv, createApp, ensureInitialBrands } from '../src/server.js';
 
 const silent = { log() {}, warn() {}, error() {} };
 const T = today('Asia/Taipei');
@@ -161,4 +161,19 @@ test('HTTP：品牌管理、金鑰不外洩、各品牌 Webhook 用各自的 sec
   assert.equal((await call(`/api/customers?brand=${b.id}`)).data.length, 1);
   assert.equal((await call('/api/customers', { method: 'POST', body: { display_name: 'x' } })).status, 400, '新增客戶必須指定品牌');
   assert.equal((await call(`/api/brands/${b.id}`, { method: 'DELETE' })).status, 400, '有客戶的品牌不能刪');
+});
+
+test('INITIAL_BRANDS：自動建立品牌，只建立一次，刪除或改名後不會被蓋回來', () => {
+  const store = openDb(':memory:');
+  const cfg = getConfig({ INITIAL_BRANDS: 'xiangyun:享運:#e8590c, lumi:璐米 ,bad slug!:壞' });
+  assert.deepEqual(cfg.initialBrands[1], { slug: 'lumi', name: '璐米' });
+  ensureInitialBrands(store, cfg, silent);
+  const brands = store.listBrands();
+  assert.deepEqual(brands.map((b) => [b.slug, b.name]), [['xiangyun', '享運'], ['lumi', '璐米'], ['bad-slug', '壞']]);
+  assert.equal(brands[0].color, '#e8590c');
+
+  store.updateBrand(brands[0].id, { name: '享運旗艦' });
+  store.deleteBrand(brands[1].id);
+  assert.equal(ensureInitialBrands(store, cfg, silent).length, 0);
+  assert.deepEqual(store.listBrands().map((b) => b.name), ['享運旗艦', '壞']);
 });
