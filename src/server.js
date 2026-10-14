@@ -10,6 +10,7 @@ import { ORDER_STATUSES, SERVICE_TYPES, openDb } from './db.js';
 import { buildFocusList } from './focus.js';
 import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
+import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
 import { LineRegistry, verifySignature } from './line.js';
 import { ReminderService, brandInfo, startScheduler, templates } from './reminders.js';
 import { WebhookHandler } from './webhook.js';
@@ -247,6 +248,13 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       return { order, notified };
     }],
     ['DELETE', /^\/api\/orders\/(\d+)$/, ([, id]) => { store.deleteOrder(toId(id)); return { ok: true }; }],
+    // 匯入舊資料：dryRun = true 為預覽（不寫入）
+    ['POST', /^\/api\/import$/, (_m, body) => badRequest(() => runImport(store, config, {
+      csv: String(body.csv ?? ''),
+      mapping: body.mapping || null,
+      brandId: body.brand_id ? Number(body.brand_id) : null,
+      dryRun: body.dry_run !== false,
+    }))],
     ['POST', /^\/api\/run-daily$/, (_m, _b, _u, req) => reminders.runDaily(new Date(), { baseUrl: `http://${req.headers.host}` })],
   ];
 
@@ -344,7 +352,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
           fs.rmSync(file, { force: true });
         }
       }
-      const exports = { '/api/export/customers.csv': ['customers', exportCustomersCsv], '/api/export/orders.csv': ['orders', exportOrdersCsv] };
+      const exports = { '/api/export/customers.csv': ['customers', exportCustomersCsv], '/api/export/orders.csv': ['orders', exportOrdersCsv], '/api/import/template.csv': ['import-template', () => toCsv(TEMPLATE_HEADERS.map((h, i) => [i, h]), [TEMPLATE_EXAMPLE])] };
       if (req.method === 'GET' && exports[url.pathname]) {
         const [name, fn] = exports[url.pathname];
         return send(res, 200, fn(brandParam(url)), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}-${today(config.tz)}.csv"` });
@@ -355,7 +363,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
         if (!m || method !== req.method) continue;
         let body = {};
         if (['POST', 'PATCH'].includes(req.method)) {
-          const raw = (await readBody(req)).toString('utf8');
+          const raw = (await readBody(req, url.pathname === '/api/import' ? 20_000_000 : undefined)).toString('utf8');
           try { body = raw ? JSON.parse(raw) : {}; } catch { throw new HttpError(400, 'JSON 格式錯誤'); }
         }
         return send(res, 200, await fn(m, body, url, req));

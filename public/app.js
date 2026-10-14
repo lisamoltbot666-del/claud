@@ -95,7 +95,7 @@ async function loadFocus() {
       ${c.picture_url ? `<img class="avatar" src="${esc(c.picture_url)}" alt="">` : '<div class="avatar"></div>'}
       <div>
         ${brandTag(c.brand_id)}<span class="name" data-open="${c.id}">${esc(nameOf(c))}</span>
-        ${c.real_name && c.display_name ? `<span class="muted">（LINE：${esc(c.display_name)}）</span>` : ''}
+        ${c.real_name && c.display_name && c.real_name !== c.display_name ? `<span class="muted">（LINE：${esc(c.display_name)}）</span>` : ''}
         ${c.tags ? `<span class="muted">｜${esc(c.tags)}</span>` : ''}
         ${item.canPush ? '' : '<span class="badge">非好友，無法推播</span>'}
         <div class="history">${historyLine(item.stats)}${c.phone ? `｜☎ ${esc(c.phone)}` : ''}</div>
@@ -157,7 +157,7 @@ async function loadCustomers() {
   $('#customer-table').innerHTML = `<thead><tr><th></th><th>名稱</th><th>電話</th><th>標籤</th><th>訂單數</th><th>累積消費</th><th>最後下單</th><th>最後訊息</th><th>好友</th></tr></thead>
   <tbody>${rows.length ? rows.map((c) => `<tr class="clickable" data-open="${c.id}">
     <td>${c.picture_url ? `<img class="avatar" style="width:28px;height:28px" src="${esc(c.picture_url)}" alt="">` : ''}</td>
-    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">客服</span>' : ''}${c.real_name && c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
+    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">客服</span>' : ''}${c.real_name && c.display_name && c.real_name !== c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
     <td>${esc(c.phone)}</td><td>${esc(c.tags)}</td><td>${c.order_count}</td><td>${money(c.total_spent)}</td>
     <td>${esc(c.last_order_date || '')}</td><td>${fmtTime(c.last_inbound_at)}</td><td>${c.is_friend ? '✅' : '—'}</td>
   </tr>`).join('') : '<tr><td colspan="9" class="empty">尚無客戶。客戶加入官方帳號好友或傳訊息後會自動出現在這裡。</td></tr>'}</tbody>`;
@@ -421,6 +421,85 @@ function forwardBadge(st) {
     ? `<span class="ok">✓ 最近轉送成功 ${fmtTime(st.at)}</span>`
     : `<span class="warn">✗ 最近轉送失敗 ${fmtTime(st.at)}：${esc(st.error)}</span>`;
 }
+
+// ---------- 匯入舊資料 ----------
+// Excel 存的 CSV 可能是 UTF-8 或 Big5，先試 UTF-8，失敗再用 Big5
+async function readCsvFile(file) {
+  const buf = await file.arrayBuffer();
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder('big5').decode(buf);
+  }
+}
+
+$('#import-data').addEventListener('click', () => {
+  const dlg = $('#drawer');
+  const state = { csv: '', mapping: null };
+  $('#drawer-body').innerHTML = `
+    <div class="row"><h2>匯入舊客戶與訂單</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
+    <p class="muted">支援 CSV 檔（Excel／Google 試算表「下載 → CSV」）。可直接匯入首席後台「匯出全部訂單 CSV」、Airtable 匯出的 CSV，或照
+      <a href="/api/import/template.csv">匯入範本</a> 填寫。一行一筆訂單；只有客戶資料、沒有訂單的行也可以。</p>
+    <div class="grid">
+      <label>匯入到哪個品牌
+        <select id="imp-brand"><option value="">依檔案中的「品牌」欄位</option>${BRANDS.map((b) => `<option value="${b.id}" ${String(b.id) === String(currentBrand) ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select>
+      </label>
+      <label>選擇檔案<input id="imp-file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
+    </div>
+    <div id="imp-preview"></div>`;
+  if (!dlg.open) dlg.showModal();
+  $('#close-drawer').onclick = () => dlg.close();
+
+  const run = (dryRun) => api('/api/import', { method: 'POST', body: { csv: state.csv, mapping: state.mapping, brand_id: $('#imp-brand').value || null, dry_run: dryRun } });
+  const preview = () => guard(async () => {
+    if (!state.csv) return;
+    $('#imp-preview').innerHTML = '<p class="muted">分析中…</p>';
+    let r;
+    try {
+      r = await run(true);
+    } catch (e) {
+      $('#imp-preview').innerHTML = `<p class="warn">${esc(e.message)}</p>`;
+      if (!state.mapping) return;
+      throw e;
+    }
+    state.mapping = r.mapping;
+    const s = r.stats;
+    const opt = (key) => `<select data-map="${key}"><option value="">（不匯入）</option>${r.headers.map((h) => `<option ${r.mapping[key] === h ? 'selected' : ''}>${esc(h)}</option>`).join('')}</select>`;
+    $('#imp-preview').innerHTML = `
+      <h3>欄位對應（系統已自動判斷，可調整）</h3>
+      <div class="grid">${r.fields.map((f) => `<label>${esc(f.label)}${opt(f.key)}</label>`).join('')}</div>
+      <h3>預覽結果（尚未寫入）</h3>
+      <div class="tiles">
+        <div class="tile"><div class="label">資料列</div><div class="value">${s.rows}</div></div>
+        <div class="tile"><div class="label">新增客戶</div><div class="value">${s.customersCreated}</div></div>
+        <div class="tile"><div class="label">對應到現有客戶</div><div class="value">${s.customersMatched}</div></div>
+        <div class="tile"><div class="label">新增訂單</div><div class="value">${s.ordersCreated}</div></div>
+        <div class="tile"><div class="label">略過（已匯入過）</div><div class="value">${s.ordersSkipped}</div></div>
+        <div class="tile"><div class="label">有問題的列</div><div class="value ${s.errors.length ? 'warn' : ''}">${s.errors.length}</div></div>
+      </div>
+      ${s.errors.length ? `<p class="warn">${s.errors.slice(0, 20).map((e) => `第 ${e.row} 列：${esc(e.message)}`).join('<br>')}${s.errors.length > 20 ? `<br>…還有 ${s.errors.length - 20} 列` : ''}</p>` : ''}
+      ${r.sample.length ? `<h3>前幾筆訂單</h3><div class="table-wrap"><table><thead><tr><th>列</th><th>品牌</th><th>客戶</th><th>用車</th><th>服務</th><th>行程</th><th>金額</th><th>狀態</th></tr></thead><tbody>
+        ${r.sample.map((o) => `<tr><td>${o.row}</td><td>${esc(o.brand)}</td><td>${esc(o.customer)}</td><td>${esc(o.service_date || o.order_date)} ${esc(o.service_time || '')}</td><td>${esc(SERVICES[o.service_type] || '')}</td><td>${esc([o.pickup, o.dropoff].filter(Boolean).join(' → '))}</td><td>${money(o.amount)}</td><td>${esc(STATUSES[o.status] || o.status)}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}
+      <p class="muted">已經過了用車日的訂單會標記為「已完成」；匯入的訂單不會自動催款。重複匯入同一份檔案不會重複建立訂單。</p>
+      <div class="row"><button id="imp-run" ${s.customersCreated + s.customersMatched + s.ordersCreated ? '' : 'disabled'}>確認匯入</button></div>`;
+    document.querySelectorAll('[data-map]').forEach((sel) => sel.onchange = () => { state.mapping = { ...state.mapping, [sel.dataset.map]: sel.value }; preview(); });
+    $('#imp-run').onclick = () => guard(async () => {
+      if (!confirm(`確定匯入？將新增 ${s.customersCreated} 位客戶、${s.ordersCreated} 筆訂單。`)) return;
+      const done = await run(false);
+      toast(`匯入完成：新增客戶 ${done.stats.customersCreated} 位、訂單 ${done.stats.ordersCreated} 筆${done.stats.errors.length ? `，${done.stats.errors.length} 列有問題未匯入` : ''}`);
+      dlg.close();
+    });
+  });
+  $('#imp-file').onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    state.csv = await readCsvFile(file);
+    state.mapping = null;
+    preview();
+  };
+  $('#imp-brand').onchange = preview;
+});
 
 $('#new-brand').addEventListener('click', () => {
   const dlg = $('#drawer');

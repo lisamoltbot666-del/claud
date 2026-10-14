@@ -136,6 +136,9 @@ export function openDb(dbPath) {
   db.exec(customersTable('customers'));
   migrateTripColumns(db);
   db.exec(SCHEMA);
+  // 匯入的訂單記錄來源編號，重複匯入同一份檔案時不會重複建立
+  if (!db.prepare('PRAGMA table_info(orders)').all().some((r) => r.name === 'import_ref')) db.exec('ALTER TABLE orders ADD COLUMN import_ref TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_import_ref ON orders(import_ref) WHERE import_ref IS NOT NULL');
   return new Store(db);
 }
 
