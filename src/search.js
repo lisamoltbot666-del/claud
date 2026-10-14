@@ -43,7 +43,7 @@ export function search(store, config, { q = '', from = '', to = '', brandId = nu
   const oConds = [];
   const oArgs = [];
   if (q) {
-    const fields = ['o.items', 'o.note', 'o.flight_no', 'o.pickup', 'o.dropoff', 'o.payment_report', 'o.import_ref', 'c.display_name', 'c.real_name', 'c.phone'];
+    const fields = ['o.items', 'o.note', 'o.flight_no', 'o.pickup', 'o.dropoff', 'o.payment_report', 'o.import_ref', 'o.driver_name_snap', 'o.driver_plate_snap', 'c.display_name', 'c.real_name', 'c.phone'];
     const sub = fields.map((f) => `${f} LIKE ? ESCAPE '\\'`);
     oArgs.push(...fields.map(() => pat));
     if (phoneQuery) { sub.push(`${PHONE_SQL('c.phone')} LIKE ?`); oArgs.push(`%${digits}%`); }

@@ -11,7 +11,7 @@ import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
 import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
 import { Auth, ROLES } from './auth.js';
-import { assignDriver, dispatchBoard, dispatchText, driverInfoText, getDriver, listDrivers, saveDriver } from './dispatch.js';
+import { assignDriver, dispatchBoard, dispatchText, driverHistory, driverInfoText, getDriver, listDrivers, saveDriver } from './dispatch.js';
 import { findDuplicates, mergeCustomers } from './merge.js';
 import { LOST_REASONS, buildFunnel, leadInfo, markLost, reopenLead } from './leads.js';
 import { buildReport } from './report.js';
@@ -243,7 +243,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       const orders = store.listOrders({ customerId: c.id });
       const duplicates = (findDuplicates(store, { brandId: c.brand_id, customerId: c.id })[0] || []).filter((d) => d.id !== c.id);
       const lead = leadInfo(store, config, c.id);
-      return { lead: lead && { date: lead.date, status: lead.status, age: lead.age, reason: c.lead_lost_reason, note: c.lead_lost_note, by: c.lead_lost_by, at: c.lead_lost_at }, lostReasons: LOST_REASONS, customer: { ...c, is_staff: store.staffIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
+      return { drivers: driverHistory(store, c.id), lead: lead && { date: lead.date, status: lead.status, age: lead.age, reason: c.lead_lost_reason, note: c.lead_lost_note, by: c.lead_lost_by, at: c.lead_lost_at }, lostReasons: LOST_REASONS, customer: { ...c, is_staff: store.staffIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
     }],
     ['POST', /^\/api\/customers\/(\d+)\/staff$/, ([, id], body, _u, req) => {
       const c = mustCustomer(toId(id));

@@ -52,7 +52,9 @@ export function assignDriver(store, orderId, driverId) {
     if (!d) throw new Error('找不到司機');
     if (!d.active) throw new Error('這位司機已停用');
   }
-  store.run('UPDATE orders SET driver_id = ?, updated_at = ? WHERE id = ?', driverId || null, new Date().toISOString(), o.id);
+  const d = driverId ? getDriver(store, driverId) : null;
+  store.run('UPDATE orders SET driver_id = ?, driver_name_snap = ?, driver_phone_snap = ?, driver_plate_snap = ?, driver_car_snap = ?, updated_at = ? WHERE id = ?',
+    d?.id ?? null, d?.name ?? null, d?.phone ?? null, d?.plate ?? null, d?.car_model ?? null, new Date().toISOString(), o.id);
   if (driverId && o.status === 'paid') store.updateOrder(o.id, { status: 'shipped' });
   if (!driverId && o.status === 'shipped') store.updateOrder(o.id, { status: 'paid' });
   return store.getOrder(o.id);
@@ -101,10 +103,22 @@ export function driverInfoText(store, orderId) {
 // 派車表：日期範圍內的行程（含司機），依用車時間排序
 export function dispatchBoard(store, { from, to, brandId = null }) {
   return store.all(
-    `SELECT o.*, c.display_name, c.real_name, c.phone, c.brand_id, d.name AS driver_name, d.plate AS driver_plate
+    `SELECT o.*, c.display_name, c.real_name, c.phone, c.brand_id, COALESCE(o.driver_name_snap, d.name) AS driver_name, COALESCE(o.driver_plate_snap, d.plate) AS driver_plate
      FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN drivers d ON d.id = o.driver_id
      WHERE o.service_date BETWEEN ? AND ? AND o.status != 'cancelled'${brandId ? ' AND c.brand_id = ?' : ''}
      ORDER BY o.service_date, COALESCE(o.service_time, '99:99'), o.id`,
     from, to, ...(brandId ? [brandId] : []),
+  );
+}
+
+// 這位客人搭過哪些司機、哪些車（依當時指派的紀錄）
+export function driverHistory(store, customerId) {
+  return store.all(
+    `SELECT COALESCE(o.driver_name_snap, d.name) AS name, COALESCE(o.driver_plate_snap, d.plate) AS plate,
+            COALESCE(o.driver_car_snap, d.car_model) AS car_model, COALESCE(o.driver_phone_snap, d.phone) AS phone,
+            COUNT(*) AS trips, MAX(COALESCE(o.service_date, o.order_date)) AS last_date
+     FROM orders o LEFT JOIN drivers d ON d.id = o.driver_id
+     WHERE o.customer_id = ? AND o.driver_id IS NOT NULL AND o.status != 'cancelled'
+     GROUP BY COALESCE(o.driver_name_snap, d.name), COALESCE(o.driver_plate_snap, d.plate) ORDER BY last_date DESC`, customerId,
   );
 }
