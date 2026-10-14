@@ -90,11 +90,30 @@
 
 - **系統更新**：之後 GitHub 的 `main` 有新版本，Render 會自動重新部署，資料不會受影響。
 - **備份**：
-  - 後台「品牌」頁右上角 **下載備份**，會下載完整資料庫檔案（`.db`），建議每週下載一次存到安全的地方。
+  - 系統每天早上會自動備份一次，存在同一顆硬碟（保留最近 14 份），後台「帳號」→「資料備份」可以看到和下載。
+  - **強烈建議設定異地備份**（見下方「設定異地備份」），硬碟或 Render 服務出問題時資料才不會一起不見。
+  - 後台「品牌」頁右上角 **下載備份**，可隨時下載目前完整的資料庫檔案（`.db`）。
   - Render 也會每天自動幫永久磁碟做快照（在服務的 **Disks** 頁可以看到並還原）。
 - **修改設定**（例如每日清單時間、自動提醒）：Render 服務 → **Environment** → 修改 `DAILY_REPORT_HOUR`、`WEEKLY_REPORT_DAY`（週報星期幾，1＝星期一）、`AUTO_PAYMENT_REMINDER`、`AUTO_REORDER_REMINDER` 等 → **Save Changes**，會自動重新啟動。
 - **改後台密碼**：同上，修改 `ADMIN_PASSWORD`。
 - **自訂網址**（例如 `crm.你的網域.com`）：服務 → **Settings** → **Custom Domains**，照指示到網域商設定 DNS。改了網址之後，記得把每個品牌在 LINE Developers 的 Webhook URL 一起換掉。
+
+## 設定異地備份（Cloudflare R2，10GB 內免費）
+
+1. 登入 [Cloudflare](https://dash.cloudflare.com)（璐米的 Worker 用的就是 Cloudflare 帳號）→ 左側 **R2 Object Storage**。第一次使用需要先啟用 R2（會要求綁定付款方式，10GB 以內免費）。
+2. **Create bucket**，名稱例如 `crm-backup`，其他用預設。
+3. 回到 R2 首頁 → **Manage API tokens**（或 **API** → **Manage API tokens**）→ **Create API token**：
+   - 權限選 **Object Read & Write**，範圍選剛剛的 `crm-backup` bucket。
+   - 建立後會顯示 **Access Key ID**、**Secret Access Key** 和 S3 端點 `https://<帳號ID>.r2.cloudflarestorage.com`。Secret 只會顯示一次，**不要貼到聊天或任何地方**，直接填到下一步。
+4. Render 服務 → **Environment**，填入：
+   - `BACKUP_S3_ENDPOINT`：`https://<帳號ID>.r2.cloudflarestorage.com`
+   - `BACKUP_S3_BUCKET`：`crm-backup`
+   - `BACKUP_S3_ACCESS_KEY_ID`、`BACKUP_S3_SECRET_ACCESS_KEY`：上一步的兩個金鑰
+   - **Save Changes**，等服務重新啟動。
+5. 後台「帳號」→「資料備份」→ **立即備份**，出現「已上傳雲端」就完成了。之後每天會自動上傳一份到 `crm-backups/` 資料夾。
+6. （選用）在 bucket 的 **Settings** → **Object lifecycle rules** 設定刪除 180 天前的檔案，避免越存越多。
+
+還原：下載任一份 `.db.gz` 解壓縮，得到 `crm.db`，交給技術人員放回 Render 的 `/var/data/crm.db`。
 
 ## 常見問題
 

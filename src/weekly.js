@@ -1,6 +1,8 @@
 import { addDays, today } from './dates.js';
 import { buildFunnel, STALE_DAYS } from './leads.js';
 import { buildReport } from './report.js';
+import { buildResponse, formatMinutes } from './response.js';
+import { buildTargets } from './targets.js';
 
 // 每週營運週報：上週（星期一～星期日）和前一週比較，加上營運建議。
 // 每週固定一天（預設星期一）在每日清單推播時一起推給「週報接收人」，管理員也可在報表頁隨時查看、手動推播。
@@ -38,6 +40,9 @@ export function buildWeekly(store, config, { now = new Date(), brandIds = null }
   const prev = buildReport(store, { from: r.prevFrom, to: r.prevTo, brandIds: ids, granularity: 'day' });
   const funnel = buildFunnel(store, config, { from: r.from, to: r.to, brandIds: ids, granularity: 'day' });
   const prevFunnel = buildFunnel(store, config, { from: r.prevFrom, to: r.prevTo, brandIds: ids, granularity: 'day' });
+  const response = buildResponse(store, config, { from: r.from, to: r.to, brandIds: ids });
+  const prevResponse = buildResponse(store, config, { from: r.prevFrom, to: r.prevTo, brandIds: ids });
+  const targets = buildTargets(store, config, { brandIds: ids, now });
 
   // 各品牌：營業額、訂單、詢問、成交率，和前一週比較
   const brandList = ids ? ids.map((id) => store.getBrand(id)).filter(Boolean) : store.listBrands();
@@ -100,6 +105,15 @@ export function buildWeekly(store, config, { now = new Date(), brandIds = null }
   if (topReason) suggestions.push(`上週未成交最多是「${topReason.reason}」（${topReason.count} 位）：${topReason.suggestion}`);
   if (funnel.totals.stale) suggestions.push(`有 ${funnel.totals.stale} 位詢問超過 ${STALE_DAYS} 天沒成交也沒標記原因，請客服補上原因，下週的分析才會準。`);
   if (funnel.totals.open) suggestions.push(`還有 ${funnel.totals.open} 位上週的詢問在洽談中，記得追蹤。`);
+  const R = response.totals;
+  if (R.answered >= 5 && R.median > 60) suggestions.push(`客服回覆時間中位數 ${formatMinutes(R.median)}，偏慢：詢問越快回覆越容易成交，建議 30 分鐘內先回一句，並多用常用回覆範本。`);
+  else if (R.answered >= 5 && prevResponse.totals.median && R.median > prevResponse.totals.median * 1.5 && R.median > 20) suggestions.push(`客服回覆變慢了（${formatMinutes(prevResponse.totals.median)} → ${formatMinutes(R.median)}），請確認人手是否足夠。`);
+  if (R.over4h) suggestions.push(`有 ${R.over4h} 次讓客人等超過 4 小時才回覆。`);
+  for (const b of targets.brands) {
+    if (b.target && b.projectedRate != null && b.projectedRate < 0.9 && targets.elapsed >= 7 && targets.elapsed < targets.days) {
+      suggestions.push(`${b.name} 本月目標 ${money(b.target)}，照目前速度月底約 ${money(b.projection)}（${pctText(b.projectedRate)}），剩下每天需約 ${money(b.perDayNeeded)} 才能達標。`);
+    }
+  }
   if (overdue.n) suggestions.push(`有 ${overdue.n} 筆訂單已過匯款期限（共 ${money(overdue.amount)}），請盡快提醒客人匯款。`);
   if (upcoming.no_driver) suggestions.push(`本週有 ${upcoming.no_driver} 趟行程還沒派司機，請提早安排。`);
   if (T.customers >= 5 && T.repeat_rate < 0.2) suggestions.push(`回頭客只佔 ${pctText(T.repeat_rate)}：服務完成後可傳感謝訊息並附回購優惠，提高回頭率。`);
@@ -115,6 +129,9 @@ export function buildWeekly(store, config, { now = new Date(), brandIds = null }
     brands,
     upcoming,
     overdue,
+    response: R,
+    prevResponse: prevResponse.totals,
+    targets,
     suggestions,
   };
   data.text = formatWeekly(data);
@@ -133,6 +150,8 @@ export function formatWeekly(d) {
     `👥 客人 ${T.customers} 位（回頭客 ${T.repeat_customers}）`,
     T.receivable ? `⏳ 待收款 ${money(T.receivable)}（${T.receivable_orders} 筆）` : '',
     `💬 新詢問 ${F.leads} 位${changeText(F.leads, d.prevFunnel.leads)}，成交 ${F.won} 位（成交率 ${pctText(F.rate)}）`,
+    d.response?.answered ? `⏱ 客服回覆中位數 ${formatMinutes(d.response.median)}（1 小時內 ${pctText(d.response.within1h)}）` : '',
+    d.targets?.total.target ? `🎯 本月目標達成 ${pctText(d.targets.total.progress)}，預估月底 ${pctText(d.targets.total.projectedRate)}` : '',
   ];
   const active = d.brands.filter((b) => b.revenue || b.prevRevenue || b.leads || b.orders);
   if (d.brands.length > 1 && active.length) {

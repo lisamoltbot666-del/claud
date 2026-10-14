@@ -4,7 +4,7 @@ const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString('zh-TW', { hour12: 
 const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
 const nameOf = (c) => c.real_name || c.display_name || `客戶#${c.id}`;
 const PRIORITY = { 1: '緊急', 2: '今日', 3: '有空時' };
-const KIND_LABEL = { payment: '匯款提醒', reorder: '回訪邀請', trip: '行程確認', care: '關心問候', birthday: '生日祝福', custom: '訊息' };
+const KIND_LABEL = { payment: '匯款提醒', reorder: '回訪邀請', trip: '行程確認', care: '關心問候', birthday: '生日祝福', thanks: '感謝與評價邀請', rebook: '回購邀請', custom: '訊息' };
 const SEGMENTS = { none: '尚未下單', first: '首次客', repeat: '回頭客', loyal: '忠實客', dormant: '沉睡客' };
 const reorderIn = (st) => {
   if (st.nextReorderDate == null) return '';
@@ -101,6 +101,8 @@ async function loadFocus() {
     const verifyOrder = item.reasons.find((r) => r.action === 'verify')?.orderId;
     const tripOrder = item.reasons.find((r) => r.action === 'trip')?.orderId;
     const dispatchOrder = item.reasons.find((r) => r.action === 'dispatch' && r.status === 'paid')?.orderId;
+    const thanksOrder = item.reasons.find((r) => r.action === 'thanks')?.orderId;
+    const rebookOrder = item.reasons.find((r) => r.action === 'rebook')?.orderId;
     return `<div class="card focus-item p${item.priority}">
       ${c.picture_url ? `<img class="avatar" src="${esc(c.picture_url)}" alt="">` : '<div class="avatar"></div>'}
       <div>
@@ -118,10 +120,12 @@ async function loadFocus() {
         ${actions.has('payment') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="payment" data-order="${payOrder}">發送匯款提醒</button>` : ''}
         ${actions.has('reorder') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="reorder">發送回訪邀請</button>` : ''}
         ${actions.has('care') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="care">發送關心問候</button>` : ''}
+        ${thanksOrder && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="thanks" data-order="${thanksOrder}">發送感謝與評價邀請</button>` : ''}
+        ${rebookOrder && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="rebook" data-order="${rebookOrder}">發送回購邀請</button>` : ''}
         ${actions.has('lead') ? `<button class="small secondary" data-compose="${c.id}" data-kind="lead">標記未成交</button>` : ''}
         ${actions.has('birthday') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="birthday">發送生日祝福</button>` : ''}
         ${actions.has('reply') ? `<button class="small secondary" data-handled="${c.id}">標記已回覆</button>` : ''}
-        ${actions.has('care') || actions.has('reorder') ? `<button class="small secondary" data-postpone="${c.id}">延後 3 天</button>` : ''}
+        ${actions.has('care') || actions.has('reorder') || actions.has('rebook') ? `<button class="small secondary" data-postpone="${c.id}">延後 3 天</button>` : ''}
         <button class="small secondary" data-open="${c.id}">查看客戶</button>
       </div>
     </div>`;
@@ -262,6 +266,7 @@ async function openCustomer(id, compose = null) {
   const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity, lead, lostReasons, drivers } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
+  const lastDone = orders.filter((o) => ['paid', 'shipped', 'completed'].includes(o.status) && o.service_date && o.service_date < TODAY).sort((a, b) => (a.service_date < b.service_date ? 1 : -1))[0];
   const upcomingTrips = orders.filter((o) => o.service_date && o.service_date >= TODAY && ['pending_payment', 'paid', 'shipped'].includes(o.status));
   const field = (key, label, type = 'text', wide = false) => `<label class="${wide ? 'wide' : ''}">${label}${type === 'textarea' ? `<textarea name="${key}">${esc(c[key])}</textarea>` : `<input name="${key}" type="${type}" value="${esc(c[key])}">`}</label>`;
 
@@ -348,6 +353,7 @@ async function openCustomer(id, compose = null) {
     <div class="row" style="margin-bottom:6px">
       ${pendingOrders.map((o) => `<button class="small secondary" data-template="payment" data-order="${o.id}">匯款提醒 #${o.id}</button>`).join('')}
       ${upcomingTrips.map((o) => `<button class="small secondary" data-template="trip" data-order="${o.id}">行程確認 #${o.id}</button>`).join('')}
+      ${lastDone ? `<button class="small secondary" data-template="thanks" data-order="${lastDone.id}">感謝與評價邀請</button><button class="small secondary" data-template="rebook" data-order="${lastDone.id}">回購邀請</button>` : ''}
       <button class="small secondary" data-template="reorder">回訪邀請</button>
       <button class="small secondary" data-template="care">關心問候</button>
       <button class="small secondary" data-template="birthday">生日祝福</button>
@@ -543,6 +549,8 @@ function brandFields(b = {}) {
     <label class="wide">Channel secret<input name="channel_secret" type="password" autocomplete="off" placeholder="${b.has_secret ? '已設定，留空表示不修改' : '請貼上'}"></label>
     <label class="wide">Channel access token（長期）<input name="channel_access_token" type="password" autocomplete="off" placeholder="${b.has_token ? '已設定，留空表示不修改' : '請貼上'}"></label>
     ${f('bank_info', '匯款資訊（會放進匯款提醒）').replace('<label>', '<label class="wide">')}
+    ${f('review_url', '評價連結（Google 評論等，會放進服務後的感謝訊息；可留空）', 'type="url" placeholder="https://g.page/r/…"').replace('<label>', '<label class="wide">')}
+    ${f('rebook_offer', '回購優惠（會放進服務後 30 天的回購邀請，例如：回頭客再訂享 9 折；可留空）').replace('<label>', '<label class="wide">')}
     ${f('forward_url', '同時轉送到（原本填在 LINE 的 Webhook 網址，舊系統還要用才填；不用請留空）', 'type="url" placeholder="https://…"').replace('<label>', '<label class="wide">')}`;
 }
 
@@ -1012,6 +1020,7 @@ async function loadReport() {
   const brandsInTable = BRANDS.filter((b) => ids.includes(b.id));
   $('#report-body').innerHTML = `
     <div id="weekly-card"></div>
+    <div id="targets-card"></div>
     <p class="muted">期間：${esc(r.from)} ～ ${esc(r.to)}</p>
     <div class="tiles">
       <div class="tile"><div class="label">營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">已付款 ${t.paid_orders} 筆</div></div>
@@ -1041,10 +1050,14 @@ async function loadReport() {
     <h3>${G_LABEL[r.granularity]}明細（各品牌）</h3>
     <div class="table-wrap"><table><thead><tr><th>${{ day: '日期', week: '週', month: '月份' }[r.granularity]}</th><th>營業額</th><th>訂單</th>${brandsInTable.map((b) => `<th>${esc(b.name)}</th>`).join('')}</tr></thead><tbody>
       ${[...series].reverse().map((m) => `<tr><td>${esc(m.label)}</td><td>${money(m.revenue)}</td><td>${m.orders}</td>${brandsInTable.map((b) => `<td>${m.brands[b.id] ? `${money(m.brands[b.id].revenue)}<div class="muted">${m.brands[b.id].orders} 筆</div>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`).join('')}
-    </tbody></table></div>`;
+    </tbody></table></div>
+    <div id="funnel-section"></div>
+    <div id="response-section"></div>
+    <div id="drivers-section"></div>`;
   bindChartTips(series);
   if (ids.length >= 2) bindBrandChart(series, ids);
-  await Promise.all([loadFunnel(from, to), loadWeekly()]);
+  const month = from.slice(0, 7) === to.slice(0, 7) ? from.slice(0, 7) : TODAY.slice(0, 7);
+  await Promise.all([loadFunnel(from, to), loadWeekly(), loadTargets(month), loadResponse(from, to), loadDriverStats(from, to)]);
 }
 
 // ---------- 每週營運週報 ----------
@@ -1087,7 +1100,7 @@ async function loadFunnel(from, to) {
   const rate = (x) => `${Math.round(x * 100)}%`;
   const meter = (x) => `<div class="meter" style="width:${Math.max(0, Math.min(1, x)) * 100}%"></div>`;
   const label = { day: '日期', week: '週', month: '月份' }[f.granularity];
-  $('#report-body').insertAdjacentHTML('beforeend', `
+  $('#funnel-section').innerHTML = (`
     <h2 style="margin-top:28px">詢問與成交</h2>
     <p class="muted">「詢問」＝新客人第一次在 LINE 傳訊息（老客人再來問不算）。之後有訂單＝成交；客服標記原因＝未成交；超過 7 天沒成交也沒標記＝逾期未標記。</p>
     <div class="tiles">
@@ -1124,6 +1137,86 @@ async function loadFunnel(from, to) {
         ${f.followUp.map((l) => `<tr class="clickable" data-compose="${l.id}" data-kind="lead"><td>${brandTag(l.brand_id)}${esc(l.name || '')}</td><td>${esc(l.date)}<div class="muted">${l.age} 天前</div></td><td>${LEAD_STATUS[l.status]}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">都處理好了 🎉</td></tr>'}
       </tbody></table></div></div>
     </div>`);
+}
+
+const meterBar = (x, cls = '') => `<div class="meter ${cls}" style="width:${Math.max(0, Math.min(1, x || 0)) * 100}%"></div>`;
+const fmtMin = (m) => (m == null ? '—' : m < 60 ? `${Math.round(m)} 分鐘` : `${Math.round((m / 60) * 10) / 10} 小時`);
+
+// ---------- 每月營收目標 ----------
+async function loadTargets(month) {
+  const r = await api(`/api/targets?${new URLSearchParams({ month, ...reportBrandParams() })}`);
+  const [y, m] = r.month.split('-');
+  $('#targets-card').innerHTML = `<h3>${y} 年 ${Number(m)} 月營收目標</h3>
+    <p class="muted">已過 ${r.elapsed} / ${r.days} 天。目標沒設定的月份會沿用最近一次設定的金額；月底預估＝已發生的營業額＋（已排定的後續訂單，或依目前每日平均推估，取較高者）。</p>
+    <div class="table-wrap"><table><thead><tr><th>品牌</th><th>目標</th><th>已達成</th><th style="width:22%">進度</th><th>月底預估</th><th>剩下每天需</th></tr></thead><tbody>
+      ${r.brands.map((b) => `<tr><td>${brandTag(b.brand_id)}</td>
+        <td><input class="target-input" data-target-brand="${b.brand_id}" inputmode="numeric" value="${b.target ?? ''}" placeholder="未設定" aria-label="${esc(b.name)} 目標">${b.targetFrom ? `<div class="muted">沿用 ${esc(b.targetFrom)}</div>` : ''}</td>
+        <td>${money(b.achieved)}</td>
+        <td>${b.target ? `${meterBar(b.progress, b.progress >= 1 ? 'good' : '')}<div class="muted">${pct(b.progress)}</div>` : '<span class="muted">—</span>'}</td>
+        <td>${money(b.projection)}${b.target ? `<div class="${b.projectedRate >= 1 ? 'ok' : b.projectedRate < 0.9 ? 'warn' : 'muted'}">${pct(b.projectedRate)}</div>` : ''}</td>
+        <td>${b.perDayNeeded != null ? money(b.perDayNeeded) : '—'}</td></tr>`).join('')}
+      ${r.total.target ? `<tr><td><strong>合計</strong></td><td>${money(r.total.target)}</td><td>${money(r.total.achieved)}</td><td>${meterBar(r.total.progress)}<div class="muted">${pct(r.total.progress)}</div></td><td>${money(r.total.projection)}<div class="muted">${pct(r.total.projectedRate)}</div></td><td></td></tr>` : ''}
+    </tbody></table></div>`;
+  document.querySelectorAll('[data-target-brand]').forEach((inp) => inp.addEventListener('change', () => guard(async () => {
+    await api('/api/targets', { method: 'PUT', body: { brandId: Number(inp.dataset.targetBrand), month: r.month, amount: inp.value || 0 } });
+    toast('目標已儲存');
+    loadTargets(r.month);
+  })));
+}
+
+// ---------- 客服回覆速度與績效 ----------
+async function loadResponse(from, to) {
+  const r = await api(`/api/response?${new URLSearchParams({ from, to, ...reportBrandParams() })}`);
+  const t = r.totals;
+  $('#response-section').innerHTML = `
+    <h2 style="margin-top:28px">客服回覆速度與績效</h2>
+    <p class="muted">客人傳訊息後，到客服在後台回覆或按「已回覆」的時間；只計算營業時間 ${r.businessHours[0]}–${r.businessHours[1]} 點。客服若在 LINE 官方帳號 App 直接回覆，請記得在後台按「已回覆」，才算得到時間。</p>
+    <div class="tiles">
+      <div class="tile"><div class="label">回覆時間（中位數）</div><div class="value">${fmtMin(t.median)}</div><div class="sub">共 ${t.answered} 次回覆</div></div>
+      <div class="tile"><div class="label">1 小時內回覆</div><div class="value">${pct(t.within1h)}</div><div class="sub">&nbsp;</div></div>
+      <div class="tile"><div class="label">等超過 4 小時</div><div class="value">${t.over4h}</div><div class="sub">次</div></div>
+      <div class="tile"><div class="label">尚未回覆</div><div class="value">${t.pending}</div><div class="sub">段對話</div></div>
+    </div>
+    ${r.insights.length ? `<div class="card" style="margin-top:12px;border-left:4px solid var(--blue)"><strong>建議</strong><ul style="margin:6px 0 0;padding-left:20px">${r.insights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px">
+      <div><h3>各客服</h3><div class="table-wrap"><table><thead><tr><th>客服</th><th>回覆</th><th>中位數</th><th>1 小時內</th><th>傳送訊息</th><th>負責詢問</th><th>成交</th></tr></thead><tbody>
+        ${r.byStaff.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.replies}</td><td>${fmtMin(x.median)}</td><td>${x.replies ? pct(x.within1h) : '—'}</td><td>${x.messages}</td><td>${x.leads}</td><td>${x.won}${x.leads ? `<div class="muted">${pct(x.rate)}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">這段期間沒有回覆紀錄</td></tr>'}
+      </tbody></table></div></div>
+      <div><h3>各品牌</h3><div class="table-wrap"><table><thead><tr><th>品牌</th><th>對話</th><th>中位數</th><th>1 小時內</th><th>尚未回覆</th></tr></thead><tbody>
+        ${r.byBrand.map((b) => `<tr><td>${brandTag(b.brand_id)}</td><td>${b.waits}</td><td>${fmtMin(b.median)}</td><td>${b.answered ? pct(b.within1h) : '—'}</td><td>${b.pending}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">—</td></tr>'}
+      </tbody></table></div></div>
+    </div>
+    ${r.byHour.length ? `<h3>客人傳訊時段</h3><div class="table-wrap"><table><thead><tr><th>時段</th><th>對話</th><th>回覆中位數</th><th style="width:40%"></th></tr></thead><tbody>
+      ${(() => { const max = Math.max(1, ...r.byHour.map((h) => h.median || 0)); return r.byHour.map((h) => `<tr><td>${h.hour}:00–${h.hour + 1}:00</td><td>${h.waits}</td><td>${fmtMin(h.median)}</td><td>${h.median != null ? meterBar(h.median / max) : ''}</td></tr>`).join(''); })()}
+    </tbody></table></div>` : ''}`;
+}
+
+// ---------- 司機與車輛 ----------
+async function loadDriverStats(from, to) {
+  const r = await api(`/api/driver-stats?${new URLSearchParams({ from, to, ...reportBrandParams() })}`);
+  const t = r.totals;
+  const md = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+  const maxW = Math.max(1, ...r.weekdays.map((w) => w.avg));
+  $('#drivers-section').innerHTML = `
+    <h2 style="margin-top:28px">司機與車輛</h2>
+    <div class="tiles">
+      <div class="tile"><div class="label">行程</div><div class="value">${t.trips}</div><div class="sub">未指派司機 ${t.unassigned} 趟</div></div>
+      <div class="tile"><div class="label">平均每天</div><div class="value">${t.avgTripsPerDay}</div><div class="sub">趟</div></div>
+      <div class="tile"><div class="label">在職司機</div><div class="value">${t.activeDrivers}</div><div class="sub">位</div></div>
+      <div class="tile"><div class="label">司機出勤率</div><div class="value">${t.utilization == null ? '—' : pct(t.utilization)}</div><div class="sub">有行程的日子</div></div>
+    </div>
+    <div class="card" style="margin-top:12px;border-left:4px solid var(--blue)"><strong>建議</strong><ul style="margin:6px 0 0;padding-left:20px">${r.insights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+      <div><h3>各司機</h3><div class="table-wrap"><table><thead><tr><th>司機</th><th>車輛</th><th>趟數</th><th>出勤天數</th><th>營業額</th></tr></thead><tbody>
+        ${r.byDriver.map((d) => `<tr><td>${esc(d.name || '')}</td><td>${esc([d.plate, d.car_model].filter(Boolean).join(' '))}</td><td>${d.trips}<div class="muted">每天 ${d.perDay} 趟</div></td><td>${d.days}</td><td>${money(d.revenue)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">沒有指派司機的行程</td></tr>'}
+      </tbody></table></div></div>
+      <div><h3>星期幾最忙</h3><div class="table-wrap"><table><thead><tr><th>星期</th><th>平均趟數</th><th style="width:45%"></th></tr></thead><tbody>
+        ${r.weekdays.map((w) => `<tr><td>星期${w.day}</td><td>${w.avg}</td><td>${meterBar(w.avg / maxW)}</td></tr>`).join('')}
+      </tbody></table></div></div>
+      <div><h3>最滿的日子</h3><div class="table-wrap"><table><thead><tr><th>日期</th><th>趟數</th><th>司機</th></tr></thead><tbody>
+        ${r.busiestDays.map((d) => `<tr><td>${md(d.date)}（${d.weekday}）</td><td>${d.trips}</td><td>${d.drivers}${d.unassigned ? `<div class="muted">未指派 ${d.unassigned}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">—</td></tr>'}
+      </tbody></table></div></div>
+    </div>`;
 }
 
 // ---------- 常用回覆範本 ----------
@@ -1178,7 +1271,52 @@ $('#new-template').addEventListener('click', () => guard(async () => {
 }));
 
 // ---------- 帳號管理 ----------
+// ---------- 資料備份、個資保存 ----------
+const fmtSize = (n) => (n >= 1048576 ? `${Math.round((n / 1048576) * 10) / 10} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+async function loadBackups() {
+  const b = await api('/api/backups');
+  const last = b.last;
+  $('#backup-section').innerHTML = `
+    <p>${b.auto ? `✅ 每天 ${b.hour}:00 自動備份，保留最近 ${b.keep} 份。` : '⚠️ 自動備份已關閉（AUTO_BACKUP=false）。'}
+      ${b.remote ? `<br>☁️ 同時上傳到雲端：<code>${esc(b.remote.endpoint)}/${esc(b.remote.bucket)}/${esc(b.remote.prefix)}</code>` : '<br><span class="warn">⚠️ 尚未設定異地備份：備份只存在同一顆硬碟，硬碟或服務出問題時會一起不見。請依說明設定 Cloudflare R2（免費 10GB）。</span>'}</p>
+    ${last ? `<p class="muted">最近一次：${fmtTime(last.at)}｜${esc(last.name)}（${fmtSize(last.size)}）${last.remote ? '｜<span class="ok">已上傳雲端</span>' : ''}${last.remoteError ? `｜<span class="warn">雲端上傳失敗：${esc(last.remoteError)}</span>` : ''}</p>` : '<p class="muted">還沒有自動備份。</p>'}
+    <div class="row"><button class="small" id="run-backup">立即備份</button><a class="button small secondary" href="/api/export/backup.db">下載目前完整資料庫</a></div>
+    ${b.files.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>備份檔</th><th>大小</th><th></th></tr></thead><tbody>
+      ${b.files.map((f) => `<tr><td><code>${esc(f.name)}</code></td><td>${fmtSize(f.size)}</td><td><a href="/api/backups/file/${encodeURIComponent(f.name)}">下載</a></td></tr>`).join('')}
+    </tbody></table></div><p class="muted">備份檔是壓縮過的資料庫（.db.gz），解壓縮後就是完整的 crm.db。</p>` : ''}`;
+  $('#run-backup').onclick = () => guard(async () => {
+    toast('備份中…');
+    const r = await api('/api/backups/run', { method: 'POST' });
+    toast(r.remoteError ? `已備份到硬碟，但雲端上傳失敗：${r.remoteError}` : `已備份 ${r.name}${r.remote ? '，並上傳雲端' : ''}`);
+    loadBackups();
+  });
+}
+
+async function loadRetention() {
+  const r = await api('/api/retention');
+  $('#retention-section').innerHTML = `
+    <p class="muted">依個資法，蒐集目的消失後應刪除或停止利用個人資料。開啟後，每天會把<strong>超過設定年數沒有任何互動</strong>（傳訊息、下訂單、用車、客服回覆）的客戶匿名化：清除姓名、電話、Email、生日、地址、LINE 帳號、備註與對話內容；訂單金額和日期會保留，營收報表不受影響。還有未完成訂單的客戶、客服、週報接收人、司機不會被匿名化。<strong>匿名化無法復原。</strong></p>
+    <div class="row"><label>保存年限 <select id="retention-years">${[0, 1, 2, 3, 5, 7, 10].map((y) => `<option value="${y}" ${y === r.years ? 'selected' : ''}>${y ? `${y} 年` : '關閉（永久保存）'}</option>`).join('')}</select></label>
+      ${r.years ? `<span>目前有 <strong>${r.count}</strong> 位客戶超過 ${r.years} 年沒有互動</span>${r.count ? '<button class="small danger" id="run-retention">立即匿名化</button>' : ''}` : ''}</div>
+    ${r.sample.length ? `<div class="muted" style="margin-top:6px">例如：${r.sample.map((c) => `<span class="name" data-open="${c.id}">${brandTag(c.brand_id)}${esc(c.name || '')}</span>（最後互動 ${esc(c.last_at || '')}）`).join('、')}</div>` : ''}`;
+  $('#retention-years').onchange = (e) => guard(async () => {
+    const years = Number(e.target.value);
+    if (years && !confirm(`確定要開啟？每天會自動把超過 ${years} 年沒有互動的客戶匿名化，無法復原。`)) { e.target.value = r.years; return; }
+    await api('/api/retention', { method: 'PUT', body: { years } });
+    toast(years ? `已設定保存 ${years} 年` : '已關閉，資料永久保存');
+    loadRetention();
+  });
+  if ($('#run-retention')) $('#run-retention').onclick = () => guard(async () => {
+    if (!confirm(`確定要把 ${r.count} 位客戶匿名化？無法復原。建議先下載一份備份。`)) return;
+    const x = await api('/api/retention/run', { method: 'POST' });
+    toast(`已匿名化 ${x.anonymized} 位客戶`);
+    loadRetention();
+  });
+}
+
 async function loadAccounts() {
+  loadBackups().catch((e) => toast(e.message));
+  loadRetention().catch((e) => toast(e.message));
   const [users, activity] = await Promise.all([api('/api/users'), api(`/api/activity?${new URLSearchParams({ user: $('#activity-user').value })}`)]);
   $('#user-table').innerHTML = `<thead><tr><th>名稱</th><th>帳號</th><th>角色</th><th>狀態</th><th>最後登入</th><th></th></tr></thead><tbody>
     <tr><td>管理員</td><td><code>admin</code></td><td>管理員</td><td>啟用</td><td></td><td class="muted">密碼＝ADMIN_PASSWORD</td></tr>

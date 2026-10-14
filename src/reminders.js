@@ -2,6 +2,8 @@ import { addDays, dateOf, diffDays, localHour, today } from './dates.js';
 import { SERVICE_TYPES } from './db.js';
 import { buildFocusList, formatFocusSummary } from './focus.js';
 import { customerStats, parseItems } from './profile.js';
+import { runBackup } from './backup.js';
+import { applyRetention } from './retention.js';
 import { buildWeekly, weekRange } from './weekly.js';
 
 const nameOf = (c) => c.real_name || c.display_name || '您好';
@@ -90,6 +92,25 @@ export const templates = {
   birthday(c, _o, cfg) {
     return `${nameOf(c)} 生日快樂 🎂\n${cfg.shopName}祝您今天開開心心！感謝一直以來的支持，有需要隨時找我們喔 💛`;
   },
+  // 服務完成後的感謝與評價邀請（品牌有設定評價連結才附上）
+  thanks(c, o, cfg) {
+    const service = SERVICE_TYPES[o?.service_type] || '服務';
+    return [
+      `${nameOf(c)} 您好，這裡是${cfg.shopName} 😊`,
+      `謝謝您這次選擇我們的${service}${o?.service_date ? `（${shortDate(o.service_date)}）` : ''}！一切都還順利嗎？`,
+      cfg.reviewUrl ? `如果您滿意這次的服務，很希望您花一分鐘幫我們留個評價，給我們很大的鼓勵 🙏\n${cfg.reviewUrl}` : '有任何建議都歡迎直接回覆告訴我們，我們會持續改進。',
+    ].join('\n');
+  },
+  // 服務後約 30 天的回購邀請（品牌有設定回購優惠才提優惠）
+  rebook(c, o, cfg) {
+    const service = SERVICE_TYPES[o?.service_type] || '用車';
+    return [
+      `${nameOf(c)} 您好，這裡是${cfg.shopName} 💛`,
+      `謝謝您上次使用我們的${service}！之後有出國、出遊或其他用車的需要，也可以交給我們。`,
+      cfg.rebookOffer ? `🎁 回頭客專屬：${cfg.rebookOffer}` : '',
+      '直接回覆這則訊息，就能幫您安排！',
+    ].filter(Boolean).join('\n');
+  },
   paymentReceived(c, o, cfg) {
     return `${nameOf(c)} 您好，已收到您訂單 #${o.id} 的款項 NT$${o.amount}，我們會盡快為您出貨，謝謝支持${cfg.shopName}！`;
   },
@@ -97,7 +118,7 @@ export const templates = {
 
 // 訊息範本用的品牌資訊：店名、匯款帳號都依客戶所屬品牌
 export function brandInfo(brand, config) {
-  return { shopName: brand?.name || config.shopName, bankInfo: brand?.bank_info || '' };
+  return { shopName: brand?.name || config.shopName, bankInfo: brand?.bank_info || '', reviewUrl: brand?.review_url || '', rebookOffer: brand?.rebook_offer || '' };
 }
 
 export class ReminderService {
@@ -282,6 +303,23 @@ export function startScheduler({ service, store, config, logger = console, baseU
         logger.log(`[每日排程 ${t}] 關懷 ${r.focusCount} 位、自動匯款提醒 ${r.paymentSent}、行程確認 ${r.tripSent}、回訪邀請 ${r.reorderSent}、通知客服 ${r.staffNotified}`);
       } catch (e) {
         logger.error(`[每日排程] 失敗：${e.message}`);
+      }
+      // 個資保存規則（管理員有設定才會執行）
+      try {
+        const n = applyRetention(store, config, { now });
+        if (n) logger.log(`[個資保存] 匿名化 ${n} 位客戶`);
+      } catch (e) {
+        logger.error(`[個資保存] 失敗：${e.message}`);
+      }
+    }
+    // 每日自動備份
+    if (config.autoBackup && store.getKv('backup_last_run') !== t) {
+      store.setKv('backup_last_run', t);
+      try {
+        const r = await runBackup(store, config, { now, logger });
+        logger.log(`[備份 ${t}] ${r.name}（${Math.round(r.size / 1024)} KB）${r.remote ? '，已上傳雲端' : ''}`);
+      } catch (e) {
+        logger.error(`[備份] 失敗：${e.message}`);
       }
     }
     // 每週營運週報：設定的星期幾（預設星期一），和每日清單同一時間

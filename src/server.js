@@ -16,6 +16,11 @@ import { findDuplicates, mergeCustomers } from './merge.js';
 import { LOST_REASONS, buildFunnel, leadInfo, markLost, reopenLead } from './leads.js';
 import { buildReport } from './report.js';
 import { buildWeekly } from './weekly.js';
+import { buildResponse } from './response.js';
+import { buildTargets, setTarget } from './targets.js';
+import { buildDriverStats } from './driverstats.js';
+import { backupDir, backupFile, lastBackup, listBackups, remoteConfigured, runBackup } from './backup.js';
+import { applyRetention, findExpired, retentionYears, setRetentionYears } from './retention.js';
 import { search } from './search.js';
 import { TEMPLATE_VARS, listTemplates, renderTemplate, saveTemplate, seedTemplates } from './templates.js';
 import { LineRegistry, verifySignature } from './line.js';
@@ -294,7 +299,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       text: reminders.preview({ customerId: mustCustomer(toId(id)).id, kind: url.searchParams.get('kind'), orderId: url.searchParams.get('orderId') ? toId(url.searchParams.get('orderId')) : null }),
     })],
     ['POST', /^\/api\/customers\/(\d+)\/send$/, async ([, id], body, _u, req) => {
-      const kind = ['payment', 'reorder', 'trip', 'care', 'birthday', 'custom'].includes(body.kind) ? body.kind : 'custom';
+      const kind = ['payment', 'reorder', 'trip', 'care', 'birthday', 'thanks', 'rebook', 'custom'].includes(body.kind) ? body.kind : 'custom';
       try {
         return await reminders.send({ customerId: mustCustomer(toId(id)).id, kind, orderId: body.orderId ? toId(body.orderId) : null, text: body.text, staffName: req.user.display_name });
       } catch (e) {
@@ -431,6 +436,51 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['GET', /^\/api\/report$/, (_m, _b, url) => {
       const t = today(config.tz);
       return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), brandIds: brandsParam(url), granularity: url.searchParams.get('g') || 'auto' }));
+    }, { admin: true }],
+    // ---------- 客服回覆速度、營收目標、司機統計（管理員）----------
+    ['GET', /^\/api\/response$/, (_m, _b, url) => {
+      const t = today(config.tz);
+      return badRequest(() => buildResponse(store, config, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandIds: brandsParam(url) }));
+    }, { admin: true }],
+    ['GET', /^\/api\/targets$/, (_m, _b, url) => badRequest(() => buildTargets(store, config, { month: url.searchParams.get('month') || null, brandIds: brandsParam(url) })), { admin: true }],
+    ['PUT', /^\/api\/targets$/, (_m, body, _u, req) => {
+      badRequest(() => setTarget(store, { brandId: toId(body.brandId), month: body.month, amount: body.amount }, req.user.display_name));
+      log(req, '設定營收目標', { detail: `${store.getBrand(toId(body.brandId))?.name} ${body.month} NT$${body.amount}` });
+      return { ok: true };
+    }, { admin: true }],
+    ['GET', /^\/api\/driver-stats$/, (_m, _b, url) => {
+      const t = today(config.tz);
+      return badRequest(() => buildDriverStats(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandIds: brandsParam(url) }));
+    }, { admin: true }],
+    // ---------- 自動備份（管理員）----------
+    ['GET', /^\/api\/backups$/, () => ({
+      files: listBackups(config),
+      last: lastBackup(store),
+      auto: config.autoBackup,
+      keep: config.backupKeep,
+      hour: config.dailyReportHour,
+      local: Boolean(backupDir(config)),
+      remote: remoteConfigured(config) ? { endpoint: new URL(config.backupS3.endpoint).host, bucket: config.backupS3.bucket, prefix: config.backupS3.prefix } : null,
+    }), { admin: true }],
+    ['POST', /^\/api\/backups\/run$/, async (_m, _b, _u, req) => {
+      const r = await runBackup(store, config, { fetchImpl, logger }).catch((e) => { throw new HttpError(500, e.message); });
+      log(req, '手動備份', { detail: `${r.name}${r.remote ? '（已上傳雲端）' : ''}${r.remoteError ? `（雲端失敗：${r.remoteError}）` : ''}` });
+      return r;
+    }, { admin: true }],
+    // ---------- 個資保存規則（管理員）----------
+    ['GET', /^\/api\/retention$/, () => {
+      const years = retentionYears(store);
+      const expired = years ? findExpired(store, config, years) : [];
+      return { years, count: expired.length, sample: expired.slice(0, 20).map((c) => ({ id: c.id, brand_id: c.brand_id, name: c.real_name || c.display_name, last_at: c.last_at > (c.last_order || '') ? c.last_at.slice(0, 10) : c.last_order })) };
+    }, { admin: true }],
+    ['PUT', /^\/api\/retention$/, (_m, body, _u, req) => {
+      const years = badRequest(() => setRetentionYears(store, body.years));
+      log(req, '設定個資保存年限', { detail: years ? `${years} 年` : '關閉' });
+      return { years };
+    }, { admin: true }],
+    ['POST', /^\/api\/retention\/run$/, (_m, _b, _u, req) => {
+      if (!retentionYears(store)) throw new HttpError(400, '請先設定保存年限');
+      return { anonymized: applyRetention(store, config, { user: req.user.display_name }) };
     }, { admin: true }],
     // ---------- 每週營運週報（管理員）----------
     ['GET', /^\/api\/weekly$/, (_m, _b, url) => {
@@ -608,6 +658,14 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
         const file = path.join(PUBLIC_DIR, STATIC[url.pathname]);
         return send(res, 200, fs.readFileSync(file), { 'Content-Type': MIME[path.extname(file)], 'Cache-Control': 'no-cache' });
       }
+      const backupMatch = req.method === 'GET' && url.pathname.match(/^\/api\/backups\/file\/([^/]+)$/);
+      if (backupMatch) {
+        if (req.user.role !== 'admin') throw new HttpError(403, '只有管理員可以下載備份');
+        const file = backupFile(config, decodeURIComponent(backupMatch[1]));
+        if (!file) throw new HttpError(404, '找不到這份備份');
+        log(req, '下載自動備份', { detail: path.basename(file) });
+        return send(res, 200, fs.readFileSync(file), { 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="${path.basename(file)}"` });
+      }
       if (req.method === 'GET' && url.pathname === '/api/export/backup.db') {
         if (req.user.role !== 'admin') throw new HttpError(403, '只有管理員可以下載備份');
         log(req, '下載備份');
@@ -630,7 +688,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
         if (!m || method !== req.method) continue;
         if (opts.admin && req.user.role !== 'admin') throw new HttpError(403, '這個功能只有管理員可以使用');
         let body = {};
-        if (['POST', 'PATCH'].includes(req.method)) {
+        if (['POST', 'PATCH', 'PUT'].includes(req.method)) {
           const raw = (await readBody(req, url.pathname === '/api/import' ? 20_000_000 : undefined)).toString('utf8');
           try { body = raw ? JSON.parse(raw) : {}; } catch { throw new HttpError(400, 'JSON 格式錯誤'); }
         }
