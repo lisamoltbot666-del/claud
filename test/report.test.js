@@ -47,15 +47,29 @@ test('品牌篩選、各品牌、各服務、前幾名', () => {
   assert.equal(all.topCustomers[0].customer_id, fresh.id);
 });
 
-test('近 12 個月：月份連續、跨年、沒有資料的月份為 0；日期反向會自動對調', () => {
-  const { store } = setup();
-  const r = buildReport(store, { from: '2026-10-31', to: '2026-10-01' });
-  assert.equal(r.from, '2026-10-01');
-  assert.equal(r.monthly.length, 12);
-  assert.equal(r.monthly[0].month, '2025-11');
-  assert.equal(r.monthly.at(-1).month, '2026-10');
-  assert.equal(r.monthly.find((m) => m.month === '2026-08').revenue, 1000);
-  assert.equal(r.monthly.find((m) => m.month === '2026-09').revenue, 0);
-  assert.equal(r.monthly.at(-1).revenue, 6900);
+test('趨勢：日／週／月區間連續、跨年、沒資料為 0、自動選單位；日期反向自動對調', () => {
+  const { store, a } = setup();
+  const m = buildReport(store, { from: '2025-11-01', to: '2026-10-31', granularity: 'month' });
+  assert.equal(m.series.length, 12);
+  assert.equal(m.series[0].key, '2025-11');
+  assert.equal(m.series.find((x) => x.key === '2026-08').revenue, 1000);
+  assert.equal(m.series.find((x) => x.key === '2026-09').revenue, 0);
+  assert.equal(m.series.at(-1).revenue, 6900);
+  assert.equal(m.series.at(-1).brands[a.id].revenue, 4200, '各品牌分列');
+
+  const w = buildReport(store, { from: '2026-10-01', to: '2026-10-31', granularity: 'week' });
+  assert.equal(w.series[0].key, '2026-09-28', '週從星期一開始');
+  assert.equal(w.series[0].label, '9/28–10/4');
+  assert.equal(w.series.reduce((s, b) => s + b.revenue, 0), 6900);
+  assert.equal(w.series.find((b) => b.key === '2026-10-05').revenue, 1200 + 3000 + 2000 + 700);
+
+  const d = buildReport(store, { from: '2026-10-31', to: '2026-10-01' });
+  assert.equal(d.from, '2026-10-01');
+  assert.equal(d.granularity, 'day', '一個月內自動用日');
+  assert.equal(d.series.length, 31);
+  assert.equal(d.series.find((b) => b.key === '2026-10-07').revenue, 3000);
+  assert.equal(d.series[4].label, '10/5（一）');
+  assert.equal(buildReport(store, { from: '2026-01-01', to: '2026-12-31' }).granularity, 'month');
+  assert.throws(() => buildReport(store, { from: '2020-01-01', to: '2026-12-31', granularity: 'day' }), /區間太多/);
   assert.throws(() => buildReport(store, { from: 'x', to: '2026-10-01' }), /日期/);
 });
