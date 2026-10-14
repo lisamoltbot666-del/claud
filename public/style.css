@@ -1,4 +1,9 @@
 [hidden] { display: none !important; }
+.search-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1 1 420px; }
+.search-bar #search-q { flex: 1 1 220px; }
+.search-bar input[type=date] { width: 9.5em; }
+mark { background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; }
+.result-group h3 { margin-top: 18px; }
 :root {
   --bg: #f5f6f8;
   --card: #fff;

@@ -11,6 +11,7 @@ import { buildFocusList } from './focus.js';
 import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
 import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
+import { search } from './search.js';
 import { LineRegistry, verifySignature } from './line.js';
 import { ReminderService, brandInfo, startScheduler, templates } from './reminders.js';
 import { WebhookHandler } from './webhook.js';
@@ -184,6 +185,9 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       }
       return { total: ids.length, added };
     }],
+    ['GET', /^\/api\/search$/, (_m, _b, url) => search(store, config, {
+      q: url.searchParams.get('q') || '', from: url.searchParams.get('from') || '', to: url.searchParams.get('to') || '', brandId: brandParam(url),
+    })],
     ['GET', /^\/api\/focus$/, (_m, _b, url) => buildFocusList(store, config, new Date(), { brandId: brandParam(url) })],
     ['GET', /^\/api\/repurchase$/, (_m, _b, url) => ({ ...buildRepurchaseList(store, config, { filter: url.searchParams.get('filter') || 'all', brandId: brandParam(url) }), segments: SEGMENTS })],
     ['GET', /^\/api\/customers$/, (_m, _b, url) => {
