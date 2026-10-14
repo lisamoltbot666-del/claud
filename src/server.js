@@ -13,6 +13,7 @@ import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
 import { Auth, ROLES } from './auth.js';
 import { assignDriver, dispatchBoard, dispatchText, driverInfoText, getDriver, listDrivers, saveDriver } from './dispatch.js';
 import { findDuplicates, mergeCustomers } from './merge.js';
+import { LOST_REASONS, buildFunnel, leadInfo, markLost, reopenLead } from './leads.js';
 import { buildReport } from './report.js';
 import { search } from './search.js';
 import { TEMPLATE_VARS, listTemplates, renderTemplate, saveTemplate, seedTemplates } from './templates.js';
@@ -241,7 +242,8 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       const c = mustCustomer(toId(id));
       const orders = store.listOrders({ customerId: c.id });
       const duplicates = (findDuplicates(store, { brandId: c.brand_id, customerId: c.id })[0] || []).filter((d) => d.id !== c.id);
-      return { customer: { ...c, is_staff: store.staffIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
+      const lead = leadInfo(store, config, c.id);
+      return { lead: lead && { date: lead.date, status: lead.status, age: lead.age, reason: c.lead_lost_reason, note: c.lead_lost_note, by: c.lead_lost_by, at: c.lead_lost_at }, lostReasons: LOST_REASONS, customer: { ...c, is_staff: store.staffIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
     }],
     ['POST', /^\/api\/customers\/(\d+)\/staff$/, ([, id], body, _u, req) => {
       const c = mustCustomer(toId(id));
@@ -390,6 +392,22 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       log(req, toDriver ? '傳派車單給司機' : '傳司機資訊給客人', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id} ${d.name}` });
       return { ok: true };
     }],
+    // ---------- 詢問成交 ----------
+    ['POST', /^\/api\/customers\/(\d+)\/lead$/, ([, id], body, _u, req) => {
+      const c = mustCustomer(toId(id));
+      if (body.lost) {
+        badRequest(() => markLost(store, c.id, body, req.user.display_name));
+        log(req, '標記未成交', { customerId: c.id, detail: `${body.reason}${body.note ? `：${body.note}` : ''}` });
+      } else {
+        reopenLead(store, c.id);
+        log(req, '重新開啟詢問', { customerId: c.id });
+      }
+      return { ok: true };
+    }],
+    ['GET', /^\/api\/funnel$/, (_m, _b, url) => {
+      const t = today(config.tz);
+      return badRequest(() => buildFunnel(store, config, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), granularity: url.searchParams.get('g') || 'auto' }));
+    }, { admin: true }],
     // ---------- 營收報表（管理員）----------
     ['GET', /^\/api\/report$/, (_m, _b, url) => {
       const t = today(config.tz);

@@ -93,9 +93,10 @@ test('關懷清單：新好友未下單、未回覆訊息', () => {
   const c = store.upsertLineCustomer(B, 'N', { displayName: 'N' });
   assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['new_friend']);
   store.addMessage(c.id, 'in', '請問有貨嗎');
-  assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['unreplied', 'new_friend']);
+  // 傳過訊息就變成「詢問」，由詢問追蹤接手（詢問 2 天後才列入），不再顯示「新好友」
+  assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['unreplied']);
   store.markHandled(c.id);
-  assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['new_friend']);
+  assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), []);
 });
 
 test('Webhook：加好友自動建檔、封鎖、匯款回報、查訂單', async () => {
