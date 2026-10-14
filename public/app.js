@@ -268,9 +268,10 @@ async function openCustomer(id, compose = null) {
   $('#drawer-body').innerHTML = `
     <div class="row">
       ${c.picture_url ? `<img class="avatar" src="${esc(c.picture_url)}" alt="">` : ''}
-      <div><h2>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">清單接收人</span>' : ''}</h2><div class="muted">${esc(brand?.name || '')} 官方帳號｜${c.line_user_id ? `LINE userId：${esc(c.line_user_id)}` : '手動建立（非 LINE 好友）'}｜${c.is_friend ? '好友' : '非好友／已封鎖'}｜加入 ${fmtTime(c.followed_at || c.created_at)}</div></div>
+      <div><h2>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">清單接收人</span>' : ''}${c.is_weekly ? ' <span class="badge">週報接收人</span>' : ''}</h2><div class="muted">${esc(brand?.name || '')} 官方帳號｜${c.line_user_id ? `LINE userId：${esc(c.line_user_id)}` : '手動建立（非 LINE 好友）'}｜${c.is_friend ? '好友' : '非好友／已封鎖'}｜加入 ${fmtTime(c.followed_at || c.created_at)}</div></div>
       <span class="spacer"></span>
       ${canPush ? `<button class="secondary small" id="toggle-staff" title="每天由「${esc(brand?.name || '')}」的官方帳號把關懷清單推播給這位">${c.is_staff ? '取消清單接收人' : '設為清單接收人'}</button>` : ''}
+      ${canPush || c.is_weekly ? `<button class="secondary small admin-only" id="toggle-weekly" title="每週由「${esc(brand?.name || '')}」的官方帳號把營運週報推播給這位（老闆、主管）">${c.is_weekly ? '取消週報接收人' : '設為週報接收人'}</button>` : ''}
       <button class="secondary" id="close-drawer">關閉</button>
     </div>
 
@@ -401,6 +402,11 @@ async function openCustomer(id, compose = null) {
     await api(`/api/customers/${id}/staff`, { method: 'POST', body: { staff: !c.is_staff } });
     toast(c.is_staff ? '已取消' : '已設為清單接收人，每天會收到關懷清單');
     loadStatus();
+    openCustomer(id);
+  });
+  if ($('#toggle-weekly')) $('#toggle-weekly').onclick = () => guard(async () => {
+    await api(`/api/customers/${id}/weekly`, { method: 'POST', body: { weekly: !c.is_weekly } });
+    toast(c.is_weekly ? '已取消週報接收人' : '已設為週報接收人，每週會收到營運週報');
     openCustomer(id);
   });
   $('#customer-form').onsubmit = (e) => { e.preventDefault(); guard(async () => {
@@ -1005,6 +1011,7 @@ async function loadReport() {
   const maxBrand = Math.max(1, ...r.byBrand.map((b) => b.revenue));
   const brandsInTable = BRANDS.filter((b) => ids.includes(b.id));
   $('#report-body').innerHTML = `
+    <div id="weekly-card"></div>
     <p class="muted">期間：${esc(r.from)} ～ ${esc(r.to)}</p>
     <div class="tiles">
       <div class="tile"><div class="label">營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">已付款 ${t.paid_orders} 筆</div></div>
@@ -1037,7 +1044,39 @@ async function loadReport() {
     </tbody></table></div>`;
   bindChartTips(series);
   if (ids.length >= 2) bindBrandChart(series, ids);
-  await loadFunnel(from, to);
+  await Promise.all([loadFunnel(from, to), loadWeekly()]);
+}
+
+// ---------- 每週營運週報 ----------
+const WEEKDAY_NAMES = '日一二三四五六';
+async function loadWeekly() {
+  const w = await api(`/api/weekly?${new URLSearchParams(reportBrandParams())}`);
+  const md = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+  const arrow = (cur, prev) => {
+    if (!prev) return cur ? '<span class="muted">前一週 0</span>' : '<span class="muted">—</span>';
+    const c = (cur - prev) / prev;
+    if (Math.abs(c) < 0.005) return '<span class="muted">持平</span>';
+    return `<span class="${c > 0 ? 'up' : 'down'}">${c > 0 ? '▲' : '▼'} ${Math.round(Math.abs(c) * 100)}%</span>`;
+  };
+  const schedule = w.weeklyReportDay >= 0 && w.weeklyReportDay <= 6 ? `每週${WEEKDAY_NAMES[w.weeklyReportDay]} ${w.dailyReportHour}:00 自動推播` : '自動推播已關閉';
+  $('#weekly-card').innerHTML = `<div class="card weekly">
+    <div class="row"><h3 style="margin:0">上週營運週報（${md(w.from)}–${md(w.to)}，和前一週比較）</h3><span class="spacer"></span>
+      <button class="small" id="send-weekly">立即推播週報</button></div>
+    <div class="tiles" style="margin-top:10px">
+      <div class="tile"><div class="label">營業額</div><div class="value">${money(w.totals.revenue)}</div><div class="sub">${arrow(w.totals.revenue, w.prevTotals.revenue)}</div></div>
+      <div class="tile"><div class="label">訂單</div><div class="value">${w.totals.orders}</div><div class="sub">${arrow(w.totals.orders, w.prevTotals.orders)}</div></div>
+      <div class="tile"><div class="label">新詢問</div><div class="value">${w.funnel.leads}</div><div class="sub">${arrow(w.funnel.leads, w.prevFunnel.leads)}</div></div>
+      <div class="tile"><div class="label">成交率</div><div class="value">${Math.round(w.funnel.rate * 100)}%</div><div class="sub">前一週 ${Math.round(w.prevFunnel.rate * 100)}%</div></div>
+    </div>
+    <h4>💡 營運建議</h4>
+    <ol class="suggestions">${w.suggestions.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+    <details><summary>LINE 推播內容預覽</summary><pre class="weekly-text">${esc(w.text)}</pre></details>
+    <p class="muted">${schedule}｜接收人：${w.recipients.length ? w.recipients.map((r) => `<span class="name" data-open="${r.id}">${brandTag(r.brand_id)}${esc(r.name)}</span>`).join('、') : '尚未設定（到客戶資料把老闆或主管設為「週報接收人」，對方需先加該品牌官方帳號好友）'}${w.lastRun ? `｜上次自動推播：${esc(w.lastRun)} 那週` : ''}</p>
+  </div>`;
+  $('#send-weekly').onclick = () => guard(async () => {
+    const r = await api('/api/weekly/send', { method: 'POST' });
+    toast(`已推播週報給 ${r.sent} 位${r.failed ? `（${r.failed} 位失敗）` : ''}`);
+  });
 }
 
 // ---------- 詢問與成交分析 ----------

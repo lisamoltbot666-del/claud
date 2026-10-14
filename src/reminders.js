@@ -2,6 +2,7 @@ import { addDays, dateOf, diffDays, localHour, today } from './dates.js';
 import { SERVICE_TYPES } from './db.js';
 import { buildFocusList, formatFocusSummary } from './focus.js';
 import { customerStats, parseItems } from './profile.js';
+import { buildWeekly, weekRange } from './weekly.js';
 
 const nameOf = (c) => c.real_name || c.display_name || '您好';
 
@@ -158,6 +159,32 @@ export class ReminderService {
     return targets;
   }
 
+  // 週報接收人：用他所屬品牌的帳號推播
+  weeklyTargets() {
+    const targets = [];
+    for (const id of this.store.weeklyIds()) {
+      const c = this.store.getCustomer(id);
+      if (c?.line_user_id && c.is_friend) targets.push({ to: c.line_user_id, line: this.context(c).line });
+    }
+    return targets;
+  }
+
+  async sendWeekly(now = new Date()) {
+    const weekly = buildWeekly(this.store, this.config, { now });
+    let sent = 0;
+    const errors = [];
+    for (const { to, line } of this.weeklyTargets()) {
+      try {
+        await line.push(to, weekly.text);
+        sent++;
+      } catch (e) {
+        errors.push(e.message);
+        this.logger.error(`推播週報失敗：${e.message}`);
+      }
+    }
+    return { sent, failed: errors.length, errors, text: weekly.text };
+  }
+
   // 自動提醒：明天到期 / 今天到期 / 已逾期的未匯款訂單，每天每筆最多一次、總共最多 3 次
   async autoPaymentReminders(now = new Date()) {
     const t = today(this.config.tz, now);
@@ -247,13 +274,27 @@ export function startScheduler({ service, store, config, logger = console, baseU
   const tick = async () => {
     const now = new Date();
     const t = today(config.tz, now);
-    if (localHour(config.tz, now) < config.dailyReportHour || store.getKv('daily_last_run') === t) return;
-    store.setKv('daily_last_run', t);
-    try {
-      const r = await service.runDaily(now, { baseUrl });
-      logger.log(`[每日排程 ${t}] 關懷 ${r.focusCount} 位、自動匯款提醒 ${r.paymentSent}、行程確認 ${r.tripSent}、回訪邀請 ${r.reorderSent}、通知客服 ${r.staffNotified}`);
-    } catch (e) {
-      logger.error(`[每日排程] 失敗：${e.message}`);
+    if (localHour(config.tz, now) < config.dailyReportHour) return;
+    if (store.getKv('daily_last_run') !== t) {
+      store.setKv('daily_last_run', t);
+      try {
+        const r = await service.runDaily(now, { baseUrl });
+        logger.log(`[每日排程 ${t}] 關懷 ${r.focusCount} 位、自動匯款提醒 ${r.paymentSent}、行程確認 ${r.tripSent}、回訪邀請 ${r.reorderSent}、通知客服 ${r.staffNotified}`);
+      } catch (e) {
+        logger.error(`[每日排程] 失敗：${e.message}`);
+      }
+    }
+    // 每週營運週報：設定的星期幾（預設星期一），和每日清單同一時間
+    const week = weekRange(config.tz, now).weekKey;
+    const weekday = new Date(`${t}T00:00:00Z`).getUTCDay();
+    if (weekday === config.weeklyReportDay && store.getKv('weekly_last_run') !== week) {
+      store.setKv('weekly_last_run', week);
+      try {
+        const r = await service.sendWeekly(now);
+        logger.log(`[週報 ${t}] 推播給 ${r.sent} 位`);
+      } catch (e) {
+        logger.error(`[週報] 失敗：${e.message}`);
+      }
     }
   };
   tick();

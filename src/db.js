@@ -525,7 +525,7 @@ export class Store {
   // 客服本人加各品牌官方帳號好友後，在後台把他設為客服；用該品牌的帳號推播給他
   // 不列入客戶清單的人：每日清單接收人、連結 LINE 的司機
   internalIds() {
-    const ids = new Set(this.staffIds());
+    const ids = new Set([...this.staffIds(), ...this.weeklyIds()]);
     for (const r of this.all('SELECT line_customer_id FROM drivers WHERE line_customer_id IS NOT NULL')) ids.add(r.line_customer_id);
     return ids;
   }
@@ -543,6 +543,22 @@ export class Store {
     if (isStaff) ids.add(customerId);
     else ids.delete(customerId);
     this.setKv('staff_customer_ids', JSON.stringify([...ids]));
+  }
+
+  // 週報接收人（通常是老闆、主管）
+  weeklyIds() {
+    try {
+      return JSON.parse(this.getKv('weekly_customer_ids') || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  setWeekly(customerId, on) {
+    const ids = new Set(this.weeklyIds());
+    if (on) ids.add(customerId);
+    else ids.delete(customerId);
+    this.setKv('weekly_customer_ids', JSON.stringify([...ids]));
   }
 
   // 完整備份：產生一份一致的資料庫副本（不影響正在使用的資料庫）

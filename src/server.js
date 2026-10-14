@@ -15,6 +15,7 @@ import { assignDriver, dispatchBoard, dispatchText, driverHistory, driverInfoTex
 import { findDuplicates, mergeCustomers } from './merge.js';
 import { LOST_REASONS, buildFunnel, leadInfo, markLost, reopenLead } from './leads.js';
 import { buildReport } from './report.js';
+import { buildWeekly } from './weekly.js';
 import { search } from './search.js';
 import { TEMPLATE_VARS, listTemplates, renderTemplate, saveTemplate, seedTemplates } from './templates.js';
 import { LineRegistry, verifySignature } from './line.js';
@@ -170,6 +171,8 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       roles: ROLES,
       brands: store.listBrands().map((b) => publicBrand(b, store)),
       staffCount: reminders.staffTargets().length,
+      weeklyCount: reminders.weeklyTargets().length,
+      weeklyReportDay: config.weeklyReportDay,
       dailyReportHour: config.dailyReportHour,
       autoPaymentReminder: config.autoPaymentReminder,
       autoReorderReminder: config.autoReorderReminder,
@@ -238,8 +241,9 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['GET', /^\/api\/repurchase$/, (_m, _b, url) => ({ ...buildRepurchaseList(store, config, { filter: url.searchParams.get('filter') || 'all', brandId: brandParam(url) }), segments: SEGMENTS })],
     ['GET', /^\/api\/customers$/, (_m, _b, url) => {
       const staff = new Set(store.staffIds());
+      const weekly = new Set(store.weeklyIds());
       const drivers = new Set(store.all('SELECT line_customer_id FROM drivers WHERE line_customer_id IS NOT NULL').map((r) => r.line_customer_id));
-      return store.listCustomers({ q: url.searchParams.get('q') || '', tag: url.searchParams.get('tag') || '', brandId: brandParam(url) }).map((c) => ({ ...c, is_staff: staff.has(c.id), is_driver: drivers.has(c.id) }));
+      return store.listCustomers({ q: url.searchParams.get('q') || '', tag: url.searchParams.get('tag') || '', brandId: brandParam(url) }).map((c) => ({ ...c, is_staff: staff.has(c.id), is_weekly: weekly.has(c.id), is_driver: drivers.has(c.id) }));
     }],
     ['POST', /^\/api\/customers$/, (_m, body, _u, req) => {
       const c = badRequest(() => store.createCustomer(Number(body.brand_id), body));
@@ -251,7 +255,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       const orders = store.listOrders({ customerId: c.id });
       const duplicates = (findDuplicates(store, { brandId: c.brand_id, customerId: c.id })[0] || []).filter((d) => d.id !== c.id);
       const lead = leadInfo(store, config, c.id);
-      return { drivers: driverHistory(store, c.id), lead: lead && { date: lead.date, status: lead.status, age: lead.age, reason: c.lead_lost_reason, note: c.lead_lost_note, by: c.lead_lost_by, at: c.lead_lost_at }, lostReasons: LOST_REASONS, customer: { ...c, is_staff: store.staffIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
+      return { drivers: driverHistory(store, c.id), lead: lead && { date: lead.date, status: lead.status, age: lead.age, reason: c.lead_lost_reason, note: c.lead_lost_note, by: c.lead_lost_by, at: c.lead_lost_at }, lostReasons: LOST_REASONS, customer: { ...c, is_staff: store.staffIds().includes(c.id), is_weekly: store.weeklyIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
     }],
     ['POST', /^\/api\/customers\/(\d+)\/staff$/, ([, id], body, _u, req) => {
       const c = mustCustomer(toId(id));
@@ -260,6 +264,13 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       log(req, body.staff ? '設為每日清單接收人' : '取消每日清單接收人', { customerId: c.id, detail: label(c) });
       return { ok: true };
     }],
+    ['POST', /^\/api\/customers\/(\d+)\/weekly$/, ([, id], body, _u, req) => {
+      const c = mustCustomer(toId(id));
+      if (body.weekly && !(c.line_user_id && c.is_friend)) throw new HttpError(400, '這位不是 LINE 好友，無法接收週報');
+      store.setWeekly(c.id, Boolean(body.weekly));
+      log(req, body.weekly ? '設為週報接收人' : '取消週報接收人', { customerId: c.id, detail: label(c) });
+      return { ok: true };
+    }, { admin: true }],
     ['PATCH', /^\/api\/customers\/(\d+)$/, ([, id], body, _u, req) => {
       const before = mustCustomer(toId(id));
       const after = store.updateCustomer(before.id, body);
@@ -420,6 +431,19 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['GET', /^\/api\/report$/, (_m, _b, url) => {
       const t = today(config.tz);
       return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), brandIds: brandsParam(url), granularity: url.searchParams.get('g') || 'auto' }));
+    }, { admin: true }],
+    // ---------- 每週營運週報（管理員）----------
+    ['GET', /^\/api\/weekly$/, (_m, _b, url) => {
+      const recipients = store.weeklyIds().map((id) => store.getCustomer(id)).filter(Boolean)
+        .map((c) => ({ id: c.id, name: c.real_name || c.display_name, brand_id: c.brand_id, is_friend: c.is_friend }));
+      return { ...badRequest(() => buildWeekly(store, config, { brandIds: brandsParam(url) })), recipients, weeklyReportDay: config.weeklyReportDay, dailyReportHour: config.dailyReportHour, lastRun: store.getKv('weekly_last_run') };
+    }, { admin: true }],
+    ['POST', /^\/api\/weekly\/send$/, async (_m, _b, _u, req) => {
+      if (!reminders.weeklyTargets().length) throw new HttpError(400, '還沒有週報接收人：請到客戶資料把老闆或主管設為「週報接收人」');
+      const r = await reminders.sendWeekly();
+      if (!r.sent) throw new HttpError(502, `週報推播失敗：${r.errors[0]}`);
+      log(req, '手動推播週報', { detail: `${r.sent} 位${r.failed ? `，失敗 ${r.failed} 位` : ''}` });
+      return { sent: r.sent, failed: r.failed };
     }, { admin: true }],
     // ---------- 常用回覆範本 ----------
     ['GET', /^\/api\/templates$/, (_m, _b, url) => ({ templates: listTemplates(store, { brandId: brandParam(url) }), vars: TEMPLATE_VARS })],
