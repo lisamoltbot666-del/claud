@@ -8,11 +8,13 @@ import { SERVICE_TYPES } from './db.js';
 const PAID = "('paid','shipped','completed')";
 const DAY = "COALESCE(o.service_date, o.order_date)";
 
-export function buildReport(store, { from, to, brandId = null, granularity = 'auto' }) {
+export function buildReport(store, { from, to, brandId = null, brandIds = null, granularity = 'auto' }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('日期格式需為 YYYY-MM-DD');
   if (from > to) [from, to] = [to, from];
-  const bWhere = brandId ? ' AND c.brand_id = ?' : '';
-  const bArgs = brandId ? [brandId] : [];
+  // 可只看一個品牌（brandId）或勾選多個品牌（brandIds）
+  const ids = brandIds?.length ? brandIds : brandId ? [brandId] : null;
+  const bWhere = ids ? ` AND c.brand_id IN (${ids.map(() => '?').join(',')})` : '';
+  const bArgs = ids || [];
   const base = `FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.status != 'cancelled' AND ${DAY} BETWEEN ? AND ?${bWhere}`;
   const args = [from, to, ...bArgs];
 

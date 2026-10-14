@@ -73,3 +73,18 @@ test('趨勢：日／週／月區間連續、跨年、沒資料為 0、自動選
   assert.throws(() => buildReport(store, { from: '2020-01-01', to: '2026-12-31', granularity: 'day' }), /區間太多/);
   assert.throws(() => buildReport(store, { from: 'x', to: '2026-10-01' }), /日期/);
 });
+
+test('勾選多個品牌：只算勾選的品牌；比較用的每品牌數字正確', async () => {
+  const { store, a, b } = setup();
+  const c = store.createBrand({ slug: 'c', name: '時客' });
+  const x = store.createCustomer(c.id, { display_name: '時客客' });
+  store.createOrder(x.id, { order_date: '2026-10-03', service_date: '2026-10-03', amount: 5000, status: 'paid' });
+  const both = buildReport(store, { from: '2026-10-01', to: '2026-10-31', brandIds: [a.id, b.id], granularity: 'month' });
+  assert.equal(both.totals.revenue, 4200 + 2700);
+  assert.deepEqual(both.byBrand.map((r) => r.brand_id).sort(), [a.id, b.id].sort());
+  assert.deepEqual(Object.keys(both.series[0].brands).map(Number).sort(), [a.id, b.id].sort());
+  assert.equal(buildReport(store, { from: '2026-10-01', to: '2026-10-31' }).totals.revenue, 4200 + 2700 + 5000);
+  const { buildFunnel } = await import('../src/leads.js');
+  const { getConfig } = await import('../src/config.js');
+  assert.equal(buildFunnel(store, getConfig({}), { from: '2026-10-01', to: '2026-10-31', brandIds: [a.id] }).totals.leads, 0);
+});

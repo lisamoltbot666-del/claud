@@ -147,6 +147,14 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       if (e instanceof HttpError) throw e;
     }
   };
+  // ?brands=1,3,5：報表勾選的多個品牌
+  const brandsParam = (url) => {
+    const raw = url.searchParams.get('brands');
+    if (!raw) return null;
+    const ids = [...new Set(raw.split(',').filter(Boolean).map(toId))];
+    for (const id of ids) mustBrand(id);
+    return ids;
+  };
   const brandParam = (url) => (url.searchParams.get('brand') ? toId(url.searchParams.get('brand')) : null);
   const badRequest = (fn) => {
     try {
@@ -406,12 +414,12 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     }],
     ['GET', /^\/api\/funnel$/, (_m, _b, url) => {
       const t = today(config.tz);
-      return badRequest(() => buildFunnel(store, config, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), granularity: url.searchParams.get('g') || 'auto' }));
+      return badRequest(() => buildFunnel(store, config, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), brandIds: brandsParam(url), granularity: url.searchParams.get('g') || 'auto' }));
     }, { admin: true }],
     // ---------- 營收報表（管理員）----------
     ['GET', /^\/api\/report$/, (_m, _b, url) => {
       const t = today(config.tz);
-      return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), granularity: url.searchParams.get('g') || 'auto' }));
+      return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), brandIds: brandsParam(url), granularity: url.searchParams.get('g') || 'auto' }));
     }, { admin: true }],
     // ---------- 常用回覆範本 ----------
     ['GET', /^\/api\/templates$/, (_m, _b, url) => ({ templates: listTemplates(store, { brandId: brandParam(url) }), vars: TEMPLATE_VARS })],
