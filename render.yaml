@@ -28,9 +28,13 @@ services:
         value: "9"
       - key: PAYMENT_DUE_DAYS
         value: "3"
+      # 只用過一次車的客戶，預設幾天後邀請再次預約（回訪週期）
       - key: DEFAULT_REORDER_DAYS
-        value: "30"
+        value: "90"
       - key: AUTO_PAYMENT_REMINDER
+        value: "false"
+      # 每天自動傳「行程確認」給明天用車的客戶（false = 由客服按按鈕發送）
+      - key: AUTO_TRIP_REMINDER
         value: "false"
       - key: AUTO_REORDER_REMINDER
         value: "false"

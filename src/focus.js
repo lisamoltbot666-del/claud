@@ -1,4 +1,5 @@
 import { addDays, dateOf, diffDays, formatDateTime, today } from './dates.js';
+import { SERVICE_TYPES } from './db.js';
 import { customerStats } from './profile.js';
 
 // 產生「今日關懷清單」：哪些客戶今天需要客服特別關心、為什麼、建議做什麼
@@ -8,15 +9,30 @@ import { customerStats } from './profile.js';
 //   1 未匯款且已逾期
 //   1 未匯款，今天到期
 //   1 客戶傳訊息尚未處理
+//   1 今天用車，還沒派車
+//   2 明天用車，還沒傳行程確認
 //   2 未匯款，明天到期
 //   2 客服排定今天（或更早）要聯絡
-//   2 依回購週期，該回購了
+//   2 依回訪週期，可邀請再次預約（邀請過後，一個週期內不再列入）
 //   2 今天生日
 //   3 新好友尚未下單
 
 export const PRIORITY_LABELS = { 1: '緊急', 2: '今日', 3: '有空時' };
 
 export { reorderCycle } from './profile.js';
+
+const ACTIVE = new Set(['pending_payment', 'paid', 'shipped']);
+
+const lastService = (stats) => [SERVICE_TYPES[stats.lastOrder?.service_type], stats.lastItems].filter(Boolean).join(' ');
+
+// 「明天 05:30 機場接送｜BR198｜台北市… → 桃園機場」
+export function tripSummary(o) {
+  return [
+    [o.service_time, SERVICE_TYPES[o.service_type] || o.items].filter(Boolean).join(' '),
+    o.flight_no,
+    o.pickup || o.dropoff ? [o.pickup, o.dropoff].filter(Boolean).join(' → ') : '',
+  ].filter(Boolean).join('｜');
+}
 
 // brandId：只看單一品牌；不給則列出全部品牌（客服帳號本身不列入）
 export function buildFocusList(store, config, now = new Date(), { brandId = null } = {}) {
@@ -63,6 +79,15 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
       }
     }
 
+    for (const o of list) {
+      if (!o.service_date || !ACTIVE.has(o.status)) continue;
+      if (o.service_date === t && o.status !== 'shipped') {
+        reasons.push({ code: 'dispatch', priority: 1, orderId: o.id, status: o.status, label: '今天用車，尚未派車', detail: `訂單 #${o.id} ${tripSummary(o)}`, action: 'dispatch' });
+      } else if (o.service_date === tomorrow && !store.lastReminder(c.id, 'trip', o.id)) {
+        reasons.push({ code: 'trip_tomorrow', priority: 2, orderId: o.id, label: '明天用車，請傳行程確認', detail: `訂單 #${o.id} ${tripSummary(o)}`, action: 'trip' });
+      }
+    }
+
     if (c.last_inbound_at && (!c.last_handled_at || c.last_inbound_at > c.last_handled_at)) {
       reasons.push({ code: 'unreplied', priority: 1, label: '有訊息尚未處理', detail: `最後訊息 ${formatDateTime(c.last_inbound_at, tz)}`, action: 'reply' });
     }
@@ -71,12 +96,16 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
       reasons.push({ code: 'scheduled', priority: 2, label: '排定今天聯絡', detail: `排定日期 ${c.next_contact_date}${c.note ? `｜備註：${c.note}` : ''}`, action: 'care' });
     }
 
-    // 客服按「延後」會把下次聯絡日設在未來，期間不再列入回購 / 新好友提醒
+    // 客服按「延後」會把下次聯絡日設在未來，期間不再列入回訪 / 新好友提醒
     const snoozed = Boolean(c.next_contact_date && c.next_contact_date > t);
 
     const stats = customerStats(c, list, config, t);
-    if (stats.orderCount && !pending.length && !snoozed && stats.daysUntilReorder <= 0 && !recentlyReminded(c.id, 'reorder')) {
-      reasons.push({ code: 'reorder', priority: 2, label: '該回購了', detail: `距上次購買 ${stats.daysSinceLastOrder} 天（回購週期 ${stats.cycle.days} 天，${stats.cycle.source}）${stats.lastItems ? `｜上次買：${stats.lastItems}` : ''}`, action: 'reorder' });
+    // 搭車、出遊不像消耗品天天會用到：邀請過一次後，等一個回訪週期再列入，避免一直推播
+    const invited = stats.orderCount ? store.lastReminder(c.id, 'reorder') : null;
+    const invitedRecently = invited && dateOf(invited.sent_at, tz) > addDays(t, -Math.max(config.reminderCooldownDays, stats.cycle.days));
+    if (stats.orderCount && !pending.length && !snoozed && stats.daysUntilReorder <= 0 && !invitedRecently) {
+      const last = lastService(stats);
+      reasons.push({ code: 'reorder', priority: 2, label: '可邀請再次預約', detail: `距上次用車 ${stats.daysSinceLastOrder} 天（回訪週期 ${stats.cycle.days} 天，${stats.cycle.source}）${last ? `｜上次：${last}` : ''}`, action: 'reorder' });
     }
 
     if (c.birthday && c.birthday.slice(5) === t.slice(5) && !recentlyReminded(c.id, 'birthday')) {
@@ -119,7 +148,8 @@ export function formatFocusSummary(focus, { brands = [], baseUrl = '' } = {}) {
     for (const item of items) {
       const name = item.customer.real_name || item.customer.display_name || `客戶#${item.customer.id}`;
       const s = item.stats;
-      const history = s?.orderCount ? `（購買 ${s.orderCount} 次，累積 NT$${s.totalSpent}${s.lastItems ? `，上次：${s.lastItems}` : ''}）` : '';
+      const last = s?.orderCount ? lastService(s) : '';
+      const history = s?.orderCount ? `（訂單 ${s.orderCount} 筆，累積 NT$${s.totalSpent}${last ? `，最近：${last}` : ''}）` : '';
       lines.push(`${PRIORITY_ICONS[item.priority]} ${name}：${item.reasons.map((r) => r.label).join('、')}${history}`);
     }
   }

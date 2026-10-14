@@ -27,13 +27,14 @@ export function getConfig(env = process.env) {
     dailyReportHour: int(env.DAILY_REPORT_HOUR, 9),
     staffUserIds: (env.STAFF_LINE_USER_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
     paymentDueDays: int(env.PAYMENT_DUE_DAYS, 3),
-    defaultReorderDays: int(env.DEFAULT_REORDER_DAYS, 30),
+    defaultReorderDays: int(env.DEFAULT_REORDER_DAYS, 90),
     newFriendDays: int(env.NEW_FRIEND_DAYS, 7),
     reminderCooldownDays: int(env.REMINDER_COOLDOWN_DAYS, 3),
     autoPaymentReminder: bool(env.AUTO_PAYMENT_REMINDER),
     autoReorderReminder: bool(env.AUTO_REORDER_REMINDER),
     // 客人傳「查訂單」、匯款通知時是否自動回覆；預設關閉，系統只記錄不回覆
     autoReply: bool(env.AUTO_REPLY),
+    autoTripReminder: bool(env.AUTO_TRIP_REMINDER),
     bankInfo: env.BANK_INFO || '',
     shopName: env.SHOP_NAME || '本店',
     // 預先建立的品牌：「代號:名稱:顏色」以逗號分隔，例如 lumi:璐米:#d6336c,lijie:利捷
