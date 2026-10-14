@@ -6,6 +6,7 @@
 mark { background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; }
 .result-group h3 { margin-top: 18px; }
 :root {
+  --series-1: #2a78d6;
   --bg: #f5f6f8;
   --card: #fff;
   --text: #1f2328;
@@ -19,7 +20,7 @@ mark { background: #ffe066; color: inherit; padding: 0 1px; border-radius: 2px; 
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111418; --card: #1b1f24; --text: #e6e8eb; --muted: #9aa3ad; --line: #2c333b; }
+  :root { --bg: #111418; --card: #1b1f24; --text: #e6e8eb; --muted: #9aa3ad; --line: #2c333b; --series-1: #3987e5; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); }
@@ -110,3 +111,14 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .login-page h1 { font-size: 20px; margin: 0 0 4px; color: var(--brand); }
 .login-page label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .who { white-space: nowrap; }
+
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .bar { fill: var(--series-1); }
+.chart .band:hover .bar, .chart .band:focus .bar { opacity: .85; }
+.chart .band { outline: none; cursor: default; }
+.chart .gridline { stroke: var(--line); stroke-width: 1; }
+.chart .axis-label { fill: var(--muted); font-size: 11px; }
+.chart .value-label { fill: var(--text); font-size: 11px; font-weight: 600; }
+.chart-tip { position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.12); white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); }
+.meter { height: 6px; border-radius: 3px; background: var(--series-1); min-width: 2px; }

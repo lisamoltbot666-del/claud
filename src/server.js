@@ -13,6 +13,7 @@ import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
 import { Auth, ROLES } from './auth.js';
 import { assignDriver, dispatchBoard, dispatchText, driverInfoText, getDriver, listDrivers, saveDriver } from './dispatch.js';
 import { findDuplicates, mergeCustomers } from './merge.js';
+import { buildReport } from './report.js';
 import { search } from './search.js';
 import { TEMPLATE_VARS, listTemplates, renderTemplate, saveTemplate, seedTemplates } from './templates.js';
 import { LineRegistry, verifySignature } from './line.js';
@@ -389,6 +390,11 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       log(req, toDriver ? '傳派車單給司機' : '傳司機資訊給客人', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id} ${d.name}` });
       return { ok: true };
     }],
+    // ---------- 營收報表（管理員）----------
+    ['GET', /^\/api\/report$/, (_m, _b, url) => {
+      const t = today(config.tz);
+      return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url) }));
+    }, { admin: true }],
     // ---------- 常用回覆範本 ----------
     ['GET', /^\/api\/templates$/, (_m, _b, url) => ({ templates: listTemplates(store, { brandId: brandParam(url) }), vars: TEMPLATE_VARS })],
     ['POST', /^\/api\/templates$/, (_m, body, _u, req) => {

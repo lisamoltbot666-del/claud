@@ -17,6 +17,7 @@
       <button data-tab="orders">訂單</button>
       <button data-tab="dispatch">派車</button>
       <button data-tab="templates">範本</button>
+      <button data-tab="report" class="admin-only">報表</button>
       <button data-tab="brands">品牌</button>
       <button data-tab="accounts" class="admin-only">帳號</button>
     </nav>
@@ -95,6 +96,22 @@
       <h3>司機名單</h3>
       <div class="toolbar"><span class="muted">司機在各品牌共用。連結司機的 LINE（司機先加任一品牌官方帳號好友並傳一則訊息）後，派車單可以直接用 LINE 傳給司機。</span><span class="spacer"></span><button id="new-driver">新增司機</button></div>
       <div class="table-wrap"><table id="driver-table"></table></div>
+    </section>
+
+    <section id="tab-report" hidden>
+      <div class="toolbar">
+        <h2>營收報表</h2>
+        <div class="seg" id="report-range">
+          <button data-range="month" class="active">本月</button>
+          <button data-range="last">上月</button>
+          <button data-range="3m">近 3 個月</button>
+          <button data-range="year">今年</button>
+        </div>
+        <input id="report-from" type="date" aria-label="從"><span class="muted">～</span><input id="report-to" type="date" aria-label="到">
+        <span class="spacer"></span>
+      </div>
+      <p class="muted">依用車日（沒有用車日則用下單日）計算。營業額＝已付款、已派車、已完成的訂單；待收款＝待付款訂單；取消的不計。回頭客＝這段期間有訂單、而且之前也訂過的客人。跟著左上角品牌篩選。</p>
+      <div id="report-body"></div>
     </section>
 
     <section id="tab-templates" hidden>
