@@ -53,6 +53,11 @@
 
 ## 第 5 步：設定 LINE Webhook（每個品牌做一次）
 
+> **原本的 Webhook URL 已經有填別的系統，而且那個系統還要繼續用？**
+> 先把**原本的網址**複製下來，貼到後台該品牌的「**同時轉送到**」欄位並儲存，再把 LINE 的 Webhook URL 換成本系統的網址。
+> 之後本系統每收到一則 LINE 事件，都會原封不動（相同內容與簽章）轉送一份給原本的系統，兩邊都能照常運作。
+> 品牌卡片上會顯示「最近轉送成功／失敗」，方便確認舊系統有收到。
+
 1. 在後台「品牌」頁，複製該品牌顯示的 **Webhook URL**，例如
    `https://line-crm-abcd.onrender.com/webhook/chicken`
 2. 回到 LINE Developers 該 channel 的 **Messaging API** 分頁：
