@@ -34,6 +34,9 @@ services:
         value: "false"
       - key: AUTO_REORDER_REMINDER
         value: "false"
+      # 客人傳「查訂單」、匯款通知時是否自動回覆（false = 只記錄、不回覆）
+      - key: AUTO_REPLY
+        value: "false"
       # 啟動時自動建立的品牌（代號:名稱:代表色）；只會建立一次，之後請在後台「品牌」頁修改
       - key: INITIAL_BRANDS
         value: "xiangyun:享運:#e8590c,lumi:璐米:#d6336c,shouxi:首席:#1c7ed6,shike:時客:#2b8a3e,lijie:利捷:#7048e8"

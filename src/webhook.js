@@ -7,8 +7,8 @@ const NON_TEXT_LABELS = { image: '[圖片]', video: '[影片]', audio: '[語音]
 
 // 處理 LINE Webhook 事件：自動收集好友資料、紀錄訊息、辨識匯款回報與查詢訂單
 export class WebhookHandler {
-  constructor({ store, lines, logger = console }) {
-    Object.assign(this, { store, lines, logger });
+  constructor({ store, lines, logger = console, autoReply = false }) {
+    Object.assign(this, { store, lines, logger, autoReply });
   }
 
   async handle(brand, body) {
@@ -38,7 +38,8 @@ export class WebhookHandler {
 
   async reply({ brand, line }, event, customer, text) {
     // 有轉送給原本系統的品牌：回覆權留給原本的系統（LINE 的 replyToken 只能用一次，兩邊都回會有一邊失敗）
-    if (!event.replyToken || !line.enabled || brand.forward_url) return;
+    // AUTO_REPLY 未開啟時一律不回覆客人，只記錄
+    if (!this.autoReply || !event.replyToken || !line.enabled || brand.forward_url) return;
     try {
       await line.reply(event.replyToken, text);
       // 自動回覆不算客服處理過，保留「未處理」狀態讓客服看到
