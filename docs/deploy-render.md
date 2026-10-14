@@ -92,7 +92,7 @@
 - **備份**：
   - 後台「品牌」頁右上角 **下載備份**，會下載完整資料庫檔案（`.db`），建議每週下載一次存到安全的地方。
   - Render 也會每天自動幫永久磁碟做快照（在服務的 **Disks** 頁可以看到並還原）。
-- **修改設定**（例如每日清單時間、自動提醒）：Render 服務 → **Environment** → 修改 `DAILY_REPORT_HOUR`、`AUTO_PAYMENT_REMINDER`、`AUTO_REORDER_REMINDER` 等 → **Save Changes**，會自動重新啟動。
+- **修改設定**（例如每日清單時間、自動提醒）：Render 服務 → **Environment** → 修改 `DAILY_REPORT_HOUR`、`WEEKLY_REPORT_DAY`（週報星期幾，1＝星期一）、`AUTO_PAYMENT_REMINDER`、`AUTO_REORDER_REMINDER` 等 → **Save Changes**，會自動重新啟動。
 - **改後台密碼**：同上，修改 `ADMIN_PASSWORD`。
 - **自訂網址**（例如 `crm.你的網域.com`）：服務 → **Settings** → **Custom Domains**，照指示到網域商設定 DNS。改了網址之後，記得把每個品牌在 LINE Developers 的 Webhook URL 一起換掉。
 

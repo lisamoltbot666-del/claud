@@ -26,6 +26,8 @@ services:
         sync: false
       - key: DAILY_REPORT_HOUR
         value: "9"
+      - key: WEEKLY_REPORT_DAY
+        value: "1"
       - key: PAYMENT_DUE_DAYS
         value: "3"
       # 只用過一次車的客戶，預設幾天後邀請再次預約（回訪週期）

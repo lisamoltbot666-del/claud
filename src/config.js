@@ -25,6 +25,8 @@ export function getConfig(env = process.env) {
     dbPath: env.DB_PATH || './data/crm.db',
     tz: env.TZ_NAME || 'Asia/Taipei',
     dailyReportHour: int(env.DAILY_REPORT_HOUR, 9),
+    // 每週營運週報在星期幾推播（0＝星期日、1＝星期一…；-1 關閉），時間同每日清單
+    weeklyReportDay: int(env.WEEKLY_REPORT_DAY, 1),
     staffUserIds: (env.STAFF_LINE_USER_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
     paymentDueDays: int(env.PAYMENT_DUE_DAYS, 3),
     defaultReorderDays: int(env.DEFAULT_REORDER_DAYS, 90),

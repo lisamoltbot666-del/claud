@@ -133,3 +133,10 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .chart .crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart .dot { stroke: var(--card); stroke-width: 2; }
 .chart .end-label { fill: var(--text); font-size: 11px; }
+
+.weekly { border-left: 4px solid var(--brand); margin-bottom: 16px; }
+.weekly h4 { margin: 14px 0 6px; }
+.weekly .suggestions { margin: 0; padding-left: 22px; line-height: 1.7; }
+.weekly .up { color: var(--brand); font-weight: 600; }
+.weekly .down { color: var(--red); font-weight: 600; }
+.weekly-text { white-space: pre-wrap; background: var(--bg); padding: 10px; border-radius: 6px; font: inherit; font-size: 13px; }
