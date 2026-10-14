@@ -81,6 +81,28 @@ export function bootstrapBrandFromEnv(store, config) {
   return null;
 }
 
+// 依 INITIAL_BRANDS 建立品牌；每個代號只建立一次，之後在後台修改或刪除都不會被蓋回來
+export function ensureInitialBrands(store, config, logger = console) {
+  let done;
+  try {
+    done = new Set(JSON.parse(store.getKv('initial_brands_created') || '[]'));
+  } catch {
+    done = new Set();
+  }
+  const created = [];
+  for (const b of config.initialBrands) {
+    if (!b.slug || done.has(b.slug)) continue;
+    try {
+      if (!store.getBrandBySlug(b.slug)) created.push(store.createBrand(b));
+      done.add(b.slug);
+    } catch (e) {
+      logger.error(`建立品牌「${b.name}」失敗：${e.message}`);
+    }
+  }
+  store.setKv('initial_brands_created', JSON.stringify([...done]));
+  return created;
+}
+
 export function createApp({ store, lines = new LineRegistry(), config, logger = console }) {
   const webhook = new WebhookHandler({ store, lines, logger });
   const reminders = new ReminderService({ store, lines, config, logger });
@@ -272,7 +294,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       }
       if (url.pathname === '/healthz') return send(res, 200, 'ok');
 
-      if (!config.adminPassword) return send(res, 503, '請先在 .env 設定 ADMIN_PASSWORD 才能使用後台');
+      if (!config.adminPassword) return send(res, 503, '請先設定 ADMIN_PASSWORD 才能使用後台（本機：.env 檔；Render：服務的 Environment 頁）');
       if (!checkAuth(req, config.adminPassword)) return send(res, 401, '請登入', { 'WWW-Authenticate': 'Basic realm="LINE CRM", charset="UTF-8"' });
 
       if (req.method === 'GET' && STATIC[url.pathname]) {
@@ -317,6 +339,7 @@ function main() {
   const config = getConfig();
   const store = openDb(config.dbPath);
   bootstrapBrandFromEnv(store, config);
+  for (const b of ensureInitialBrands(store, config)) console.log(`已建立品牌：${b.name}（${b.slug}）`);
   const lines = new LineRegistry();
   const app = createApp({ store, lines, config });
   http.createServer(app).listen(config.port, () => {
