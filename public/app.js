@@ -250,7 +250,7 @@ $('#order-when').addEventListener('change', () => guard(loadOrders));
 // ---------- customer drawer ----------
 async function openCustomer(id, compose = null) {
   currentCustomerId = id;
-  const { customer: c, brand, stats: st, orders, messages, reminders } = await api(`/api/customers/${id}`);
+  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
   const upcomingTrips = orders.filter((o) => o.service_date && o.service_date >= TODAY && ['pending_payment', 'paid', 'shipped'].includes(o.status));
@@ -265,6 +265,12 @@ async function openCustomer(id, compose = null) {
       <button class="secondary" id="close-drawer">關閉</button>
     </div>
 
+    ${duplicates.length ? `<div class="card" style="border-left:4px solid var(--amber);margin-top:12px">
+      <strong>可能是同一個人</strong> <span class="muted">（同品牌、電話或姓名相同）</span>
+      ${duplicates.map((d) => `<div class="row" style="margin-top:6px"><span class="name" data-open="${d.id}">${esc(nameOf(d))}</span>
+        <span class="muted">${esc(d.phone || '')}｜訂單 ${d.order_count} 筆｜${d.line_user_id ? 'LINE 好友' : '非 LINE 好友'}</span><span class="spacer"></span>
+        <button class="small" data-merge-in="${d.id}">把這筆合併進來</button></div>`).join('')}
+    </div>` : ''}
     <h3>消費總覽</h3>
     <div class="tiles">
       <div class="tile"><div class="label">客戶類型</div><div class="value">${SEGMENTS[st.segment]}</div><div class="sub">再次預約 ${st.repeatCount} 次</div></div>
@@ -328,6 +334,12 @@ async function openCustomer(id, compose = null) {
       <div class="row" style="margin-top:6px"><button type="submit" ${canPush ? '' : 'disabled'}>推播給客戶</button><button type="button" class="secondary" id="mark-handled">標記已回覆（不發訊息）</button><span class="muted">推播會使用官方帳號訊息額度</span></div>
     </form>
 
+    <details style="margin-top:14px"><summary class="muted">合併其他客戶到這筆…</summary>
+      <p class="muted">同一個人被建立成兩筆時（例如先匯入舊資料、後來才在 LINE 傳訊息），可以把另一筆的訂單、對話、資料併到這筆，另一筆會被刪除。只能合併同品牌的客戶。</p>
+      <input id="merge-search" type="search" placeholder="輸入對方的姓名或電話">
+      <div id="merge-results"></div>
+    </details>
+
     <h3>對話紀錄</h3>
     <div class="chat" id="chat">${messages.map((m) => `<div class="bubble ${m.direction}">${esc(m.text)}<time>${fmtTime(m.created_at)}</time></div>`).join('') || '<div class="muted">尚無訊息</div>'}</div>
 
@@ -340,6 +352,18 @@ async function openCustomer(id, compose = null) {
   chat.scrollTop = chat.scrollHeight;
 
   $('#close-drawer').onclick = () => dlg.close();
+  document.querySelectorAll('[data-merge-in]').forEach((b) => b.onclick = () => guard(() => mergeInto(id, Number(b.dataset.mergeIn))));
+  $('#merge-search').oninput = () => {
+    clearTimeout(mergeTimer);
+    mergeTimer = setTimeout(() => guard(async () => {
+      const q = $('#merge-search').value.trim();
+      if (q.length < 2) { $('#merge-results').innerHTML = ''; return; }
+      const r = await api(`/api/search?${new URLSearchParams({ q, brand: c.brand_id })}`);
+      const others = r.customers.filter((x) => x.id !== id).slice(0, 8);
+      $('#merge-results').innerHTML = others.map((x) => `<div class="row" style="margin-top:4px">${esc(nameOf(x))} <span class="muted">${esc(x.phone || '')}｜訂單 ${x.order_count} 筆</span><span class="spacer"></span><button class="small secondary" data-merge-pick="${x.id}">合併進來</button></div>`).join('') || '<span class="muted">找不到</span>';
+      document.querySelectorAll('[data-merge-pick]').forEach((b) => b.onclick = () => guard(() => mergeInto(id, Number(b.dataset.mergePick))));
+    }), 250);
+  };
   if ($('#toggle-staff')) $('#toggle-staff').onclick = () => guard(async () => {
     await api(`/api/customers/${id}/staff`, { method: 'POST', body: { staff: !c.is_staff } });
     toast(c.is_staff ? '已取消客服' : '已設為客服，每天會收到關懷清單');
@@ -474,6 +498,36 @@ function forwardBadge(st) {
     ? `<span class="ok">✓ 最近轉送成功 ${fmtTime(st.at)}</span>`
     : `<span class="warn">✗ 最近轉送失敗 ${fmtTime(st.at)}：${esc(st.error)}</span>`;
 }
+
+// ---------- 合併重複客戶 ----------
+let mergeTimer;
+async function mergeInto(keepId, otherId) {
+  const other = await api(`/api/customers/${otherId}`);
+  if (!confirm(`把「${nameOf(other.customer)}」（訂單 ${other.orders.length} 筆）合併到這位客戶？\n\n對方的訂單、對話、提醒紀錄會搬過來，空白的資料欄位會用對方的補上，然後刪除對方那一筆。無法復原。`)) return;
+  await api(`/api/customers/${keepId}/merge`, { method: 'POST', body: { other_id: otherId } });
+  toast('已合併');
+  openCustomer(keepId);
+}
+
+$('#find-duplicates').addEventListener('click', () => guard(async () => {
+  const groups = await api(`/api/duplicates?${brandQs()}`);
+  const dlg = $('#drawer');
+  $('#drawer-body').innerHTML = `
+    <div class="row"><h2>可能重複的客戶（${groups.length} 組）</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
+    <p class="muted">同品牌中電話相同、或姓名／LINE 名稱相同的客戶。每組第一筆是建議保留的（優先保留 LINE 好友，才能繼續推播）。請確認是同一人再合併。</p>
+    ${groups.map((g) => `<div class="card">${g.map((c, i) => `<div class="row" style="margin:4px 0">
+        ${brandTag(c.brand_id)}<span class="name" data-open="${c.id}">${esc(nameOf(c))}</span>
+        <span class="muted">${esc(c.phone || '')}｜訂單 ${c.order_count} 筆｜${c.line_user_id ? 'LINE 好友' : '非 LINE 好友'}</span>
+        <span class="spacer"></span>${i === 0 ? '<span class="badge">保留</span>' : `<button class="small" data-dup-keep="${g[0].id}" data-dup-other="${c.id}">合併到第一筆</button>`}
+      </div>`).join('')}</div>`).join('') || '<div class="card empty">沒有找到重複的客戶 🎉</div>'}`;
+  if (!dlg.open) dlg.showModal();
+  $('#close-drawer').onclick = () => dlg.close();
+  document.querySelectorAll('[data-dup-keep]').forEach((b) => b.onclick = () => guard(async () => {
+    await api(`/api/customers/${b.dataset.dupKeep}/merge`, { method: 'POST', body: { other_id: Number(b.dataset.dupOther) } });
+    toast('已合併');
+    $('#find-duplicates').click();
+  }));
+}));
 
 // ---------- 匯入舊資料 ----------
 // Excel 存的 CSV 可能是 UTF-8 或 Big5，先試 UTF-8，失敗再用 Big5

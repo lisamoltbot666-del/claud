@@ -11,6 +11,7 @@ import { buildFocusList } from './focus.js';
 import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
 import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
+import { findDuplicates, mergeCustomers } from './merge.js';
 import { search } from './search.js';
 import { LineRegistry, verifySignature } from './line.js';
 import { ReminderService, brandInfo, startScheduler, templates } from './reminders.js';
@@ -185,6 +186,9 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       }
       return { total: ids.length, added };
     }],
+    ['GET', /^\/api\/duplicates$/, (_m, _b, url) => findDuplicates(store, { brandId: brandParam(url) })],
+    // 把 other_id 合併進 :id（保留 :id）
+    ['POST', /^\/api\/customers\/(\d+)\/merge$/, ([, id], body) => badRequest(() => mergeCustomers(store, mustCustomer(toId(id)).id, mustCustomer(toId(body.other_id)).id))],
     ['GET', /^\/api\/search$/, (_m, _b, url) => search(store, config, {
       q: url.searchParams.get('q') || '', from: url.searchParams.get('from') || '', to: url.searchParams.get('to') || '', brandId: brandParam(url),
     })],
@@ -198,7 +202,8 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['GET', /^\/api\/customers\/(\d+)$/, ([, id]) => {
       const c = mustCustomer(toId(id));
       const orders = store.listOrders({ customerId: c.id });
-      return { customer: { ...c, is_staff: store.staffIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id) };
+      const duplicates = (findDuplicates(store, { brandId: c.brand_id, customerId: c.id })[0] || []).filter((d) => d.id !== c.id);
+      return { customer: { ...c, is_staff: store.staffIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates };
     }],
     ['POST', /^\/api\/customers\/(\d+)\/staff$/, ([, id], body) => {
       const c = mustCustomer(toId(id));
