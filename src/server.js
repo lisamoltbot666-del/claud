@@ -11,6 +11,7 @@ import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
 import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
 import { Auth, ROLES } from './auth.js';
+import { assignDriver, dispatchBoard, dispatchText, driverInfoText, getDriver, listDrivers, saveDriver } from './dispatch.js';
 import { findDuplicates, mergeCustomers } from './merge.js';
 import { search } from './search.js';
 import { TEMPLATE_VARS, listTemplates, renderTemplate, saveTemplate, seedTemplates } from './templates.js';
@@ -227,7 +228,8 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['GET', /^\/api\/repurchase$/, (_m, _b, url) => ({ ...buildRepurchaseList(store, config, { filter: url.searchParams.get('filter') || 'all', brandId: brandParam(url) }), segments: SEGMENTS })],
     ['GET', /^\/api\/customers$/, (_m, _b, url) => {
       const staff = new Set(store.staffIds());
-      return store.listCustomers({ q: url.searchParams.get('q') || '', tag: url.searchParams.get('tag') || '', brandId: brandParam(url) }).map((c) => ({ ...c, is_staff: staff.has(c.id) }));
+      const drivers = new Set(store.all('SELECT line_customer_id FROM drivers WHERE line_customer_id IS NOT NULL').map((r) => r.line_customer_id));
+      return store.listCustomers({ q: url.searchParams.get('q') || '', tag: url.searchParams.get('tag') || '', brandId: brandParam(url) }).map((c) => ({ ...c, is_staff: staff.has(c.id), is_driver: drivers.has(c.id) }));
     }],
     ['POST', /^\/api\/customers$/, (_m, body, _u, req) => {
       const c = badRequest(() => store.createCustomer(Number(body.brand_id), body));
@@ -333,6 +335,59 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['POST', /^\/api\/run-daily$/, (_m, _b, _u, req) => {
       log(req, '手動推播每日清單');
       return reminders.runDaily(new Date(), { baseUrl: `http://${req.headers.host}` });
+    }],
+    // ---------- 司機與派車 ----------
+    ['GET', /^\/api\/drivers$/, () => listDrivers(store)],
+    ['POST', /^\/api\/drivers$/, (_m, body, _u, req) => {
+      const d = badRequest(() => saveDriver(store, null, body));
+      log(req, '新增司機', { detail: d.name });
+      return d;
+    }],
+    ['PATCH', /^\/api\/drivers\/(\d+)$/, ([, id], body, _u, req) => {
+      const d = badRequest(() => saveDriver(store, toId(id), body));
+      log(req, '修改司機資料', { detail: d.name });
+      return d;
+    }],
+    ['GET', /^\/api\/dispatch$/, (_m, _b, url) => {
+      const from = url.searchParams.get('from') || today(config.tz);
+      const to = url.searchParams.get('to') || from;
+      return { from, to, orders: dispatchBoard(store, { from, to, brandId: brandParam(url) }), drivers: listDrivers(store, { activeOnly: true }) };
+    }],
+    ['POST', /^\/api\/orders\/(\d+)\/driver$/, ([, id], body, _u, req) => {
+      const before = mustOrder(toId(id));
+      const o = badRequest(() => assignDriver(store, before.id, body.driver_id ? toId(body.driver_id) : null));
+      const d = o.driver_id ? getDriver(store, o.driver_id) : null;
+      log(req, d ? '指派司機' : '取消指派司機', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id}${d ? ` → ${d.name}` : ''}` });
+      return o;
+    }],
+    ['GET', /^\/api\/orders\/(\d+)\/dispatch$/, ([, id]) => {
+      const o = mustOrder(toId(id));
+      const d = o.driver_id ? getDriver(store, o.driver_id) : null;
+      const link = d?.line_customer_id ? store.getCustomer(d.line_customer_id) : null;
+      return {
+        order: o,
+        driver: d,
+        text: dispatchText(store, o.id),
+        customerText: d ? driverInfoText(store, o.id) : '',
+        canPushDriver: Boolean(link?.line_user_id && link.is_friend),
+        drivers: listDrivers(store, { activeOnly: true }),
+      };
+    }],
+    ['POST', /^\/api\/orders\/(\d+)\/dispatch\/(driver|customer)$/, async ([, id, target], body, _u, req) => {
+      const o = mustOrder(toId(id));
+      const d = o.driver_id ? getDriver(store, o.driver_id) : null;
+      if (!d) throw new HttpError(400, '請先指派司機');
+      const toDriver = target === 'driver';
+      if (toDriver && !d.line_customer_id) throw new HttpError(400, '這位司機還沒連結 LINE，請複製派車單用其他方式傳送');
+      const text = String(body.text || '').trim() || (toDriver ? dispatchText(store, o.id) : driverInfoText(store, o.id));
+      try {
+        await reminders.send({ customerId: toDriver ? d.line_customer_id : o.customer_id, orderId: toDriver ? null : o.id, kind: 'custom', text, staffName: req.user.display_name });
+      } catch (e) {
+        throw new HttpError(502, e.message);
+      }
+      if (toDriver) store.run('UPDATE orders SET dispatched_at = ? WHERE id = ?', new Date().toISOString(), o.id);
+      log(req, toDriver ? '傳派車單給司機' : '傳司機資訊給客人', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id} ${d.name}` });
+      return { ok: true };
     }],
     // ---------- 常用回覆範本 ----------
     ['GET', /^\/api\/templates$/, (_m, _b, url) => ({ templates: listTemplates(store, { brandId: brandParam(url) }), vars: TEMPLATE_VARS })],

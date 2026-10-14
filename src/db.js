@@ -133,6 +133,19 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 CREATE INDEX IF NOT EXISTS idx_activity_customer ON activity(customer_id, id);
 
+-- 司機（各品牌共用）；line_customer_id 連結到某品牌官方帳號的 LINE 好友，用來推播派車單
+CREATE TABLE IF NOT EXISTS drivers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  phone TEXT,
+  plate TEXT,
+  car_model TEXT,
+  note TEXT,
+  line_customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- 常用回覆範本（brand_id 空白 = 全部品牌共用）
 CREATE TABLE IF NOT EXISTS reply_templates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -181,6 +194,10 @@ export function openDb(dbPath) {
   // 對話、提醒記錄由哪位客服送出
   for (const table of ['messages', 'reminders']) {
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === 'staff_name')) db.exec(`ALTER TABLE ${table} ADD COLUMN staff_name TEXT`);
+  }
+  // 訂單指派的司機、派車單送出時間
+  for (const col of ['driver_id INTEGER', 'dispatched_at TEXT']) {
+    if (!db.prepare('PRAGMA table_info(orders)').all().some((r) => r.name === col.split(' ')[0])) db.exec(`ALTER TABLE orders ADD COLUMN ${col}`);
   }
   // 匯入的訂單記錄來源編號，重複匯入同一份檔案時不會重複建立
   if (!db.prepare('PRAGMA table_info(orders)').all().some((r) => r.name === 'import_ref')) db.exec('ALTER TABLE orders ADD COLUMN import_ref TEXT');
@@ -437,8 +454,8 @@ export class Store {
     if (status) { where.push('o.status = ?'); params.push(status); }
     if (customerId) { where.push('o.customer_id = ?'); params.push(customerId); }
     return this.all(
-      `SELECT o.*, c.display_name, c.real_name, c.line_user_id, c.brand_id
-       FROM orders o JOIN customers c ON c.id = o.customer_id
+      `SELECT o.*, c.display_name, c.real_name, c.line_user_id, c.brand_id, d.name AS driver_name, d.plate AS driver_plate
+       FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN drivers d ON d.id = o.driver_id
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY o.order_date DESC, o.id DESC`,
       ...params,
@@ -486,6 +503,13 @@ export class Store {
 
   // ---------- 客服（接收每日清單的人）----------
   // 客服本人加各品牌官方帳號好友後，在後台把他設為客服；用該品牌的帳號推播給他
+  // 不列入客戶清單的人：每日清單接收人、連結 LINE 的司機
+  internalIds() {
+    const ids = new Set(this.staffIds());
+    for (const r of this.all('SELECT line_customer_id FROM drivers WHERE line_customer_id IS NOT NULL')) ids.add(r.line_customer_id);
+    return ids;
+  }
+
   staffIds() {
     try {
       return JSON.parse(this.getKv('staff_customer_ids') || '[]');

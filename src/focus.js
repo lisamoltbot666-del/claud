@@ -41,7 +41,7 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
   const tomorrow = addDays(t, 1);
   const cooldownStart = addDays(t, -config.reminderCooldownDays);
 
-  const staff = new Set(store.staffIds());
+  const staff = store.internalIds();
   const customers = (brandId ? store.all('SELECT * FROM customers WHERE brand_id = ?', brandId) : store.all('SELECT * FROM customers'))
     .filter((c) => !staff.has(c.id));
   const orders = store.all("SELECT * FROM orders WHERE status != 'cancelled' ORDER BY order_date, id");
@@ -81,7 +81,7 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
 
     for (const o of list) {
       if (!o.service_date || !ACTIVE.has(o.status)) continue;
-      if (o.service_date === t && o.status !== 'shipped') {
+      if (o.service_date === t && o.status !== 'shipped' && !o.driver_id) {
         reasons.push({ code: 'dispatch', priority: 1, orderId: o.id, status: o.status, label: '今天用車，尚未派車', detail: `訂單 #${o.id} ${tripSummary(o)}`, action: 'dispatch' });
       } else if (o.service_date === tomorrow && !store.lastReminder(c.id, 'trip', o.id)) {
         reasons.push({ code: 'trip_tomorrow', priority: 2, orderId: o.id, label: '明天用車，請傳行程確認', detail: `訂單 #${o.id} ${tripSummary(o)}`, action: 'trip' });
