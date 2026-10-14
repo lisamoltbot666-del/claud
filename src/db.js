@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS ${name} (
   address TEXT,
   tags TEXT,
   note TEXT,
-  reorder_days INTEGER,          -- 手動指定回購週期（天），空白則自動推算
+  reorder_days INTEGER,          -- 手動指定回訪週期（天），空白則自動推算
   next_contact_date TEXT,        -- 客服手動排定的下次聯絡日
   is_friend INTEGER NOT NULL DEFAULT 1,
   followed_at TEXT,
@@ -49,9 +49,16 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  items TEXT,
+  items TEXT,                    -- 服務內容（如：送機 7 人座）
   amount INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'pending_payment', -- pending_payment | paid | shipped | completed | cancelled
+  status TEXT NOT NULL DEFAULT 'pending_payment', -- pending_payment | paid | shipped（已派車）| completed | cancelled
+  service_type TEXT,             -- airport 機場接送 | charter 包車 | rental 租車自駕
+  service_date TEXT,             -- 用車日 / 取車日 YYYY-MM-DD
+  service_time TEXT,             -- HH:MM
+  flight_no TEXT,
+  pickup TEXT,                   -- 上車地點 / 取車地點
+  dropoff TEXT,                  -- 目的地 / 還車地點
+  return_date TEXT,              -- 包車結束日 / 還車日
   order_date TEXT NOT NULL,
   payment_due_date TEXT,
   payment_report TEXT,           -- 客戶回報的匯款資訊（如帳號末五碼）
@@ -65,6 +72,7 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_line ON customers(brand_id, line_user_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_service_date ON orders(service_date);
 
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,7 +88,7 @@ CREATE TABLE IF NOT EXISTS reminders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
   order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
-  kind TEXT NOT NULL,            -- payment | reorder | care | custom
+  kind TEXT NOT NULL,            -- payment | reorder | trip | care | birthday | custom
   text TEXT,
   ok INTEGER NOT NULL DEFAULT 1,
   error TEXT,
@@ -96,16 +104,24 @@ CREATE TABLE IF NOT EXISTS kv (
 `;
 
 export const ORDER_STATUSES = {
-  pending_payment: '待匯款',
-  paid: '已匯款',
-  shipped: '已出貨',
+  pending_payment: '待付款',
+  paid: '已付款',
+  shipped: '已派車',
   completed: '已完成',
   cancelled: '已取消',
 };
 
+export const SERVICE_TYPES = {
+  airport: '機場接送',
+  charter: '包車',
+  rental: '租車自駕',
+};
+
+const TRIP_COLUMNS = ['service_type', 'service_date', 'service_time', 'flight_no', 'pickup', 'dropoff', 'return_date'];
+
 const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
 const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info', 'forward_url'];
-const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note'];
+const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note', ...TRIP_COLUMNS];
 
 const nowIso = () => new Date().toISOString();
 const plain = (row) => (row ? { ...row } : row);
@@ -118,8 +134,16 @@ export function openDb(dbPath) {
   if (!db.prepare('PRAGMA table_info(brands)').all().some((r) => r.name === 'forward_url')) db.exec('ALTER TABLE brands ADD COLUMN forward_url TEXT');
   migrateLegacyCustomers(db);
   db.exec(customersTable('customers'));
+  migrateTripColumns(db);
   db.exec(SCHEMA);
   return new Store(db);
+}
+
+// 舊版資料庫的訂單表沒有行程欄位：直接補上（新欄位都可為空，舊訂單照常運作）
+function migrateTripColumns(db) {
+  const cols = db.prepare('PRAGMA table_info(orders)').all().map((r) => r.name);
+  if (!cols.length) return;
+  for (const col of TRIP_COLUMNS) if (!cols.includes(col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} TEXT`);
 }
 
 // 舊版（單一品牌）資料庫：客戶表沒有 brand_id，重建客戶表並把所有客戶歸到「預設品牌」
@@ -332,6 +356,8 @@ export class Store {
   updateOrder(id, fields) {
     const keys = ORDER_EDITABLE.filter((k) => k in fields);
     if (fields.status && !ORDER_STATUSES[fields.status]) throw new Error(`未知的訂單狀態：${fields.status}`);
+    if (fields.service_type && !SERVICE_TYPES[fields.service_type]) throw new Error(`未知的服務類型：${fields.service_type}`);
+    if (fields.service_time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(fields.service_time)) throw new Error('時間格式需為 HH:MM');
     const before = this.getOrder(id);
     if (!before) return null;
     if (keys.length) {

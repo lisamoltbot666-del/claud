@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig, loadEnvFile } from './config.js';
 import { addDays, today } from './dates.js';
-import { ORDER_STATUSES, openDb } from './db.js';
+import { ORDER_STATUSES, SERVICE_TYPES, openDb } from './db.js';
 import { buildFocusList } from './focus.js';
 import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
@@ -148,9 +148,11 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       dailyReportHour: config.dailyReportHour,
       autoPaymentReminder: config.autoPaymentReminder,
       autoReorderReminder: config.autoReorderReminder,
+      autoTripReminder: config.autoTripReminder,
       lastDailyRun: store.getKv('daily_last_run'),
       today: today(config.tz),
       orderStatuses: ORDER_STATUSES,
+      serviceTypes: SERVICE_TYPES,
     })],
     ['GET', /^\/api\/brands$/, () => store.listBrands().map((b) => publicBrand(b, store))],
     ['POST', /^\/api\/brands$/, (_m, body, _u, req) => { notSelf(body.forward_url, req); return publicBrand(badRequest(() => store.createBrand(body)), store); }],
@@ -206,7 +208,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       text: reminders.preview({ customerId: mustCustomer(toId(id)).id, kind: url.searchParams.get('kind'), orderId: url.searchParams.get('orderId') ? toId(url.searchParams.get('orderId')) : null }),
     })],
     ['POST', /^\/api\/customers\/(\d+)\/send$/, async ([, id], body) => {
-      const kind = ['payment', 'reorder', 'care', 'birthday', 'custom'].includes(body.kind) ? body.kind : 'custom';
+      const kind = ['payment', 'reorder', 'trip', 'care', 'birthday', 'custom'].includes(body.kind) ? body.kind : 'custom';
       try {
         return await reminders.send({ customerId: mustCustomer(toId(id)).id, kind, orderId: body.orderId ? toId(body.orderId) : null, text: body.text });
       } catch (e) {
@@ -217,12 +219,12 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['POST', /^\/api\/orders$/, (_m, body) => {
       const c = mustCustomer(toId(body.customer_id));
       const orderDate = body.order_date || today(config.tz);
-      return store.createOrder(c.id, {
+      return badRequest(() => store.createOrder(c.id, {
         ...body,
         amount: Math.round(Number(body.amount) || 0),
         order_date: orderDate,
-        payment_due_date: body.payment_due_date || (body.status && body.status !== 'pending_payment' ? null : addDays(orderDate, config.paymentDueDays)),
-      });
+        payment_due_date: body.payment_due_date || (body.status && body.status !== 'pending_payment' ? null : defaultPaymentDue(orderDate, body.service_date)),
+      }));
     }],
     ['PATCH', /^\/api\/orders\/(\d+)$/, async ([, id], body) => {
       const before = mustOrder(toId(id));
@@ -249,6 +251,14 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
   ];
 
   const toCsv = (cols, rows) => `\uFEFF${[cols.map(([, label]) => csvCell(label)).join(','), ...rows.map((r) => cols.map(([k]) => csvCell(r[k])).join(','))].join('\r\n')}`;
+
+  // 匯款期限預設下單後 N 天，但最晚要在用車前一天（當天或隔天就用車的，期限就是下單日）
+  function defaultPaymentDue(orderDate, serviceDate) {
+    const due = addDays(orderDate, config.paymentDueDays);
+    if (!serviceDate || due < serviceDate) return due;
+    const dayBefore = addDays(serviceDate, -1);
+    return dayBefore > orderDate ? dayBefore : orderDate;
+  }
 
   const brandName = () => {
     const names = new Map(store.listBrands().map((b) => [b.id, b.name]));
@@ -278,18 +288,19 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     });
     return toCsv([
       ['id', '編號'], ['brand', '品牌'], ['display_name', 'LINE 名稱'], ['real_name', '姓名'], ['phone', '電話'], ['email', 'Email'], ['birthday', '生日'], ['gender', '性別'],
-      ['address', '地址'], ['tags', '標籤'], ['note', '備註'], ['segment', '客戶類型'], ['order_count', '購買次數'], ['total_spent', '累積消費'], ['avg_order', '平均客單價'],
-      ['first_order_date', '首次購買'], ['last_order_date', '最近購買'], ['cycle_days', '回購週期(天)'], ['next_reorder_date', '預計回購日'], ['top_items', '常買商品'],
+      ['address', '地址'], ['tags', '標籤'], ['note', '備註'], ['segment', '客戶類型'], ['order_count', '訂單數'], ['total_spent', '累積消費'], ['avg_order', '平均客單價'],
+      ['first_order_date', '首次用車'], ['last_order_date', '最近用車'], ['cycle_days', '回訪週期(天)'], ['next_reorder_date', '預計回訪日'], ['top_items', '常用服務'],
       ['is_friend', 'LINE 好友'], ['line_user_id', 'LINE userId'],
     ], rows);
   }
 
   function exportOrdersCsv(brandId) {
     const nameOfBrand = brandName();
-    const rows = store.listOrders({ brandId }).map((o) => ({ ...o, brand: nameOfBrand(o.brand_id), customer_name: o.real_name || o.display_name, status_label: ORDER_STATUSES[o.status] }));
+    const rows = store.listOrders({ brandId }).map((o) => ({ ...o, brand: nameOfBrand(o.brand_id), customer_name: o.real_name || o.display_name, status_label: ORDER_STATUSES[o.status], service_label: SERVICE_TYPES[o.service_type] || '' }));
     return toCsv([
-      ['id', '訂單編號'], ['brand', '品牌'], ['order_date', '日期'], ['customer_id', '客戶編號'], ['customer_name', '客戶'], ['items', '品項'], ['amount', '金額'],
-      ['status_label', '狀態'], ['payment_due_date', '匯款期限'], ['payment_report', '匯款回報'], ['paid_at', '入帳時間'], ['note', '備註'],
+      ['id', '訂單編號'], ['brand', '品牌'], ['order_date', '下單日'], ['customer_id', '客戶編號'], ['customer_name', '客戶'], ['service_label', '服務'],
+      ['service_date', '用車日'], ['service_time', '時間'], ['flight_no', '航班'], ['pickup', '上車／取車地點'], ['dropoff', '目的地／還車地點'], ['return_date', '結束／還車日'],
+      ['items', '內容'], ['amount', '金額'], ['status_label', '狀態'], ['payment_due_date', '匯款期限'], ['payment_report', '匯款回報'], ['paid_at', '入帳時間'], ['note', '備註'],
     ], rows);
   }
 
