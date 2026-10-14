@@ -24,7 +24,7 @@ const SUGGESTIONS = {
 };
 
 /** 所有「詢問」：每位 LINE 客人第一次傳訊息的時間，以及之後是否成交 */
-function allLeads(store, config, { brandId = null, brandIds = null } = {}) {
+export function allLeads(store, config, { brandId = null, brandIds = null } = {}) {
   const ids = brandIds?.length ? brandIds : brandId ? [brandId] : null;
   const tz = config.tz;
   const t = today(tz);

@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS brands (
   channel_access_token TEXT,
   bank_info TEXT,
   forward_url TEXT,              -- 同時轉送 Webhook 給原本使用的系統（可留空）
+  review_url TEXT,               -- 評價連結（Google 評論等），放進服務後的感謝訊息
+  rebook_offer TEXT,             -- 回購優惠說明，放進服務後 30 天的回購邀請
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 `;
@@ -44,6 +46,7 @@ CREATE TABLE IF NOT EXISTS ${name} (
   lead_lost_note TEXT,
   lead_lost_at TEXT,
   lead_lost_by TEXT,
+  anonymized_at TEXT,            -- 依個資保存規則匿名化的時間
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -150,6 +153,16 @@ CREATE TABLE IF NOT EXISTS drivers (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- 每月營收目標（各品牌；沒設定的月份沿用最近一次）
+CREATE TABLE IF NOT EXISTS revenue_targets (
+  brand_id INTEGER NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
+  month TEXT NOT NULL,           -- YYYY-MM
+  amount INTEGER NOT NULL,
+  updated_by TEXT,
+  updated_at TEXT,
+  PRIMARY KEY (brand_id, month)
+);
+
 -- 常用回覆範本（brand_id 空白 = 全部品牌共用）
 CREATE TABLE IF NOT EXISTS reply_templates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,7 +192,7 @@ export const SERVICE_TYPES = {
 const TRIP_COLUMNS = ['service_type', 'service_date', 'service_time', 'flight_no', 'pickup', 'dropoff', 'return_date'];
 
 const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
-const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info', 'forward_url'];
+const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info', 'forward_url', 'review_url', 'rebook_offer'];
 const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note', ...TRIP_COLUMNS];
 
 const nowIso = () => new Date().toISOString();
@@ -190,7 +203,10 @@ export function openDb(dbPath) {
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(BRANDS_TABLE);
-  if (!db.prepare('PRAGMA table_info(brands)').all().some((r) => r.name === 'forward_url')) db.exec('ALTER TABLE brands ADD COLUMN forward_url TEXT');
+  // 轉送網址、評價連結、回購優惠
+  for (const col of ['forward_url', 'review_url', 'rebook_offer']) {
+    if (!db.prepare('PRAGMA table_info(brands)').all().some((r) => r.name === col)) db.exec(`ALTER TABLE brands ADD COLUMN ${col} TEXT`);
+  }
   migrateLegacyCustomers(db);
   db.exec(customersTable('customers'));
   migrateTripColumns(db);
@@ -198,7 +214,7 @@ export function openDb(dbPath) {
   // 詢問未成交原因
   {
     const cols = new Set(db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name));
-    for (const col of ['lead_lost_reason', 'lead_lost_note', 'lead_lost_at', 'lead_lost_by']) if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
+    for (const col of ['lead_lost_reason', 'lead_lost_note', 'lead_lost_at', 'lead_lost_by', 'anonymized_at']) if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
   }
   // 對話、提醒記錄由哪位客服送出
   for (const table of ['messages', 'reminders']) {
@@ -313,6 +329,11 @@ export class Store {
       }
       if (!['https:', 'http:'].includes(u.protocol)) throw new Error('轉送網址需以 https:// 開頭');
     }
+    if (fields.review_url) {
+      fields = { ...fields, review_url: String(fields.review_url).trim() };
+      if (!/^https?:\/\/\S+$/.test(fields.review_url)) throw new Error('評價連結需以 https:// 開頭');
+    }
+    if (fields.rebook_offer) fields = { ...fields, rebook_offer: String(fields.rebook_offer).trim().slice(0, 200) };
     const keys = BRAND_EDITABLE.filter((k) => k in fields);
     if (keys.length) this.run(`UPDATE brands SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => (fields[k] === '' ? null : fields[k])), id);
     return this.getBrand(id);

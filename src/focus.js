@@ -16,6 +16,8 @@ import { customerStats } from './profile.js';
 //   2 客服排定今天（或更早）要聯絡
 //   2 依回訪週期，可邀請再次預約（邀請過後，一個週期內不再列入）
 //   2 今天生日
+//   2 服務完成 1～3 天，可傳感謝與評價邀請
+//   2 服務完成約 30 天（REBOOK_DAYS）還沒再訂，可傳回購邀請
 //   3 新好友尚未下單
 
 export const PRIORITY_LABELS = { 1: '緊急', 2: '今日', 3: '有空時' };
@@ -44,7 +46,7 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
 
   const staff = store.internalIds();
   const customers = (brandId ? store.all('SELECT * FROM customers WHERE brand_id = ?', brandId) : store.all('SELECT * FROM customers'))
-    .filter((c) => !staff.has(c.id));
+    .filter((c) => !staff.has(c.id) && !c.anonymized_at);
   const orders = store.all("SELECT * FROM orders WHERE status != 'cancelled' ORDER BY order_date, id");
   const ordersByCustomer = new Map();
   for (const o of orders) {
@@ -110,6 +112,23 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
     if (stats.orderCount && !pending.length && !snoozed && stats.daysUntilReorder <= 0 && !invitedRecently) {
       const last = lastService(stats);
       reasons.push({ code: 'reorder', priority: 2, label: '可邀請再次預約', detail: `距上次用車 ${stats.daysSinceLastOrder} 天（回訪週期 ${stats.cycle.days} 天，${stats.cycle.source}）${last ? `｜上次：${last}` : ''}`, action: 'reorder' });
+    }
+
+    // 服務完成後：感謝與評價邀請、約 30 天後的回購邀請（每筆訂單各一次）
+    const done = list.filter((o) => ['paid', 'shipped', 'completed'].includes(o.status) && (o.return_date || o.service_date));
+    const endOf = (o) => (o.return_date && o.return_date > o.service_date ? o.return_date : o.service_date);
+    const latest = done.sort((a, b) => (endOf(a) < endOf(b) ? -1 : 1)).at(-1);
+    if (latest && c.line_user_id) {
+      const end = endOf(latest);
+      const later = list.some((o) => o.id !== latest.id && (o.service_date || o.order_date) > end);
+      if (end >= addDays(t, -3) && end <= addDays(t, -1) && !store.lastReminder(c.id, 'thanks', latest.id)) {
+        reasons.push({ code: 'thanks', priority: 2, orderId: latest.id, label: '服務已完成，可傳感謝與評價邀請', detail: `訂單 #${latest.id} ${end}｜${tripSummary(latest)}`, action: 'thanks' });
+      }
+      const since = diffDays(t, end);
+      if (since >= config.rebookDays && since < config.rebookDays + 7 && !later && !pending.length && !snoozed
+        && !store.lastReminder(c.id, 'rebook', latest.id) && !reasons.some((r) => r.code === 'reorder')) {
+        reasons.push({ code: 'rebook', priority: 2, orderId: latest.id, label: `服務後 ${since} 天，可傳回購邀請`, detail: `訂單 #${latest.id} ${end}｜${tripSummary(latest)}`, action: 'rebook' });
+      }
     }
 
     if (c.birthday && c.birthday.slice(5) === t.slice(5) && !recentlyReminded(c.id, 'birthday')) {

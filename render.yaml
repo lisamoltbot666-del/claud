@@ -28,6 +28,17 @@ services:
         value: "9"
       - key: WEEKLY_REPORT_DAY
         value: "1"
+      # 計算客服回覆速度的營業時間
+      - key: BUSINESS_HOURS
+        value: "9-21"
+      # 服務完成後幾天提醒傳回購邀請
+      - key: REBOOK_DAYS
+        value: "30"
+      # 每天自動備份，保留最近 14 份；異地備份（Cloudflare R2）的 BACKUP_S3_* 金鑰請在 Render 的 Environment 自行新增
+      - key: AUTO_BACKUP
+        value: "true"
+      - key: BACKUP_KEEP
+        value: "14"
       - key: PAYMENT_DUE_DAYS
         value: "3"
       # 只用過一次車的客戶，預設幾天後邀請再次預約（回訪週期）

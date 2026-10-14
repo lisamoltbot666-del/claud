@@ -88,7 +88,7 @@ export function buildRepurchaseList(store, config, { filter = 'all', brandId = n
   const staff = store.internalIds();
   const customers = brandId ? store.all('SELECT * FROM customers WHERE brand_id = ?', brandId) : store.all('SELECT * FROM customers');
   for (const c of customers) {
-    if (staff.has(c.id)) continue;
+    if (staff.has(c.id) || c.anonymized_at) continue;
     const stats = customerStats(c, byCustomer.get(c.id) || [], config, t);
     if (!stats.orderCount) continue;
     const hasPending = (byCustomer.get(c.id) || []).some((o) => o.status === 'pending_payment');
