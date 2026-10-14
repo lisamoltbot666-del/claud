@@ -201,7 +201,7 @@ test('轉送：已驗證的 Webhook 原封不動轉給舊系統；舊系統掛�
   // 設定驗證
   assert.equal((await patch(a.id, { forward_url: 'ftp://x' })).status, 400);
   assert.equal((await patch(a.id, { forward_url: `${base}/webhook/alpha` })).status, 400, '不能轉給自己');
-  assert.equal((await patch(a.id, { forward_url: `http://localhost:${old.address().port}/line/alpha` })).status, 200);
+  assert.equal((await patch(a.id, { forward_url: `http://localhost:${old.address().port}/api/bookings?lineWebhook=ALPHA` })).status, 200);
   assert.equal((await patch(b.id, { forward_url: 'http://127.0.0.1:1/down' })).status, 200);
 
   const payload = JSON.stringify({ events: [{ type: 'message', source: { type: 'user', userId: 'U5' }, replyToken: 'r', message: { type: 'text', text: '你好 😊' } }] });
@@ -211,10 +211,20 @@ test('轉送：已驗證的 Webhook 原封不動轉給舊系統；舊系統掛�
   assert.equal((await post('alpha', sign('secA'))).status, 200);
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(received.length, 1);
-  assert.equal(received[0].path, '/line/alpha');
+  assert.equal(received[0].path, '/api/bookings?lineWebhook=ALPHA', '網址參數保留');
   assert.equal(received[0].body.toString(), payload, '內容一字不差');
   assert.equal(received[0].sig, sign('secA'), '簽章原樣帶過去，舊系統可照常驗證');
   assert.ok(store.getCustomerByLineId(a.id, 'U5'), '本系統照常建檔');
+
+  // 有轉送的品牌不使用 replyToken（留給原本系統回覆），但仍記錄匯款回報
+  const ca = store.getCustomerByLineId(a.id, 'U5');
+  const order = store.createOrder(ca.id, { order_date: '2026-10-15', payment_due_date: '2026-10-16', amount: 1000 });
+  const paid = JSON.stringify({ events: [{ type: 'message', source: { type: 'user', userId: 'U5' }, replyToken: 'r2', message: { type: 'text', text: '已匯款 末五碼 12345' } }] });
+  await fetch(`${base}/webhook/alpha`, { method: 'POST', body: paid, headers: { 'x-line-signature': crypto.createHmac('sha256', 'secA').update(paid).digest('base64') } });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.match(store.getOrder(order.id).payment_report, /12345/);
+  assert.equal(lines.for(a).replies.length, 0, '不搶原本系統的回覆');
+  received.length = 1;
 
   assert.equal((await post('alpha', 'bad')).status, 401);
   assert.equal((await post('alpha', sign('secA'), { 'x-crm-forwarded': '1' })).status, 200);

@@ -36,8 +36,9 @@ export class WebhookHandler {
     return this.store.upsertLineCustomer(brand.id, userId, profile);
   }
 
-  async reply({ line }, event, customer, text) {
-    if (!event.replyToken || !line.enabled) return;
+  async reply({ brand, line }, event, customer, text) {
+    // 有轉送給原本系統的品牌：回覆權留給原本的系統（LINE 的 replyToken 只能用一次，兩邊都回會有一邊失敗）
+    if (!event.replyToken || !line.enabled || brand.forward_url) return;
     try {
       await line.reply(event.replyToken, text);
       // 自動回覆不算客服處理過，保留「未處理」狀態讓客服看到
