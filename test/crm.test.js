@@ -88,14 +88,12 @@ test('關懷清單：可邀請再次預約、邀請後一個週期內不再列�
   assert.deepEqual(reasonsOf(buildFocusList(store, config), c2.id), ['scheduled', 'reorder']);
 });
 
-test('關懷清單：新好友未下單、未回覆訊息', () => {
+test('關懷清單：新好友未下單；傳過訊息後不再列為新好友，也不列未回覆（LINE App 本身有未讀標示）', () => {
   const { config, store } = setup();
   const c = store.upsertLineCustomer(B, 'N', { displayName: 'N' });
   assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['new_friend']);
   store.addMessage(c.id, 'in', '請問有貨嗎');
   // 傳過訊息就變成「詢問」，由詢問追蹤接手（詢問 2 天後才列入），不再顯示「新好友」
-  assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), ['unreplied']);
-  store.markHandled(c.id);
   assert.deepEqual(reasonsOf(buildFocusList(store, config), c.id), []);
 });
 
@@ -193,7 +191,7 @@ test('HTTP：後台需登入、webhook 驗簽、API 流程', async (t) => {
   assert.equal(order.payment_due_date, addDays(T, 3));
 
   const focus = (await call('/api/focus')).data;
-  assert.deepEqual(focus.items[0].reasons.map((r) => r.code), ['unreplied']);
+  assert.ok(!focus.items.some((i) => i.reasons.some((r) => r.code === 'unreplied')));
 
   const paid = (await call(`/api/orders/${order.id}`, { method: 'PATCH', body: { status: 'paid', notify: true } })).data;
   assert.equal(paid.notified, true);

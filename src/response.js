@@ -2,9 +2,15 @@ import { addDays, dateOf } from './dates.js';
 import { allLeads } from './leads.js';
 
 // 客服回覆速度與績效。
-// 「等待」＝客人傳訊息、而客服還沒回覆的這段時間；客服在後台傳訊息、或按「已回覆」就算回覆了。
-// （客服若直接在 LINE 官方帳號 App 回覆，記得在後台按「已回覆」，時間才算得到。）
+// 「等待」＝客人傳訊息、而客服還沒回覆的這段時間。
+// 客服在 LINE 官方帳號 App 回覆時，LINE 不會通知本系統，所以用對話節奏估計：
+//   客人隔了 GAP_MINUTES 以上又傳訊息，代表中間客服回覆過 → 以客人下一則訊息的時間當作回覆時間（估計，會比實際稍長）。
+//   客服在後台傳訊息、或按「已回覆」，則是精確時間，並算在該客服名下。
+//   估計超過 ESTIMATE_MAX 分鐘的不計（可能客服早就回了、只是客人隔天才回話）；客人沒再傳訊息的對話也無法判斷、不計。
 // 只計算營業時間（預設 9–21 點）內的等待，半夜傳來的訊息不會讓客服看起來回得很慢。
+
+export const GAP_MINUTES = 10;
+export const ESTIMATE_MAX = 240;
 
 export const HANDLED_ACTION = '標記已回覆';
 const AUTO = '系統自動';
@@ -46,16 +52,19 @@ export function formatMinutes(m) {
   return `${h < 10 ? Math.round(h * 10) / 10 : Math.round(h)} 小時`;
 }
 
-const summarize = (waits) => {
-  const done = waits.filter((w) => w.minutes != null);
-  const mins = done.map((w) => w.minutes);
+const summarize = (all) => {
+  const waits = all.filter((w) => w.minutes != null);
+  const mins = waits.map((w) => w.minutes);
   return {
     waits: waits.length,
-    answered: done.length,
-    pending: waits.length - done.length,
+    answered: waits.length,
+    exact: waits.filter((w) => !w.estimated).length,
+    estimated: waits.filter((w) => w.estimated).length,
+    unknown: all.length - waits.length, // 客人沒再傳訊息、或間隔太久，無法判斷
     median: median(mins),
-    within1h: done.length ? done.filter((w) => w.minutes <= 60).length / done.length : 0,
-    over4h: done.filter((w) => w.minutes > 240).length,
+    within1h: waits.length ? waits.filter((w) => w.minutes <= 60).length / waits.length : 0,
+    // 超過 4 小時只算精確紀錄（估計值太長的本來就不計）
+    over4h: waits.filter((w) => !w.estimated && w.minutes > 240).length,
   };
 };
 
@@ -86,10 +95,18 @@ function collectWaits(store, config, { from, to, ids }) {
       open = null;
     }
     if (e.kind === 'in') {
+      // 客人隔一段時間又傳訊息 → 推定中間客服回覆過
+      if (open && Date.parse(e.at) - Date.parse(open.lastIn) >= GAP_MINUTES * 60000) {
+        const m = businessMinutes(open.start, e.at, tz, config.businessHours);
+        if (m <= ESTIMATE_MAX) Object.assign(open, { minutes: m, estimated: true, end: e.at });
+        open = null;
+      }
       if (!open) {
         const date = dateOf(e.at, tz);
-        open = { customer_id: e.customer_id, brand_id: e.brand_id, start: e.at, date, minutes: null, who: null };
+        open = { customer_id: e.customer_id, brand_id: e.brand_id, start: e.at, lastIn: e.at, date, minutes: null, who: null, estimated: false };
         if (date >= from && date <= to) waits.push(open);
+      } else {
+        open.lastIn = e.at;
       }
     } else if (open) {
       open.minutes = businessMinutes(open.start, e.at, tz, config.businessHours);
@@ -149,12 +166,11 @@ export function buildResponse(store, config, { from, to, brandId = null, brandId
 
   const insights = [];
   if (totals.answered) {
-    insights.push(`營業時間內回覆時間中位數 ${formatMinutes(totals.median)}，${Math.round(totals.within1h * 100)}% 在 1 小時內回覆。`);
+    insights.push(`營業時間內回覆時間中位數約 ${formatMinutes(totals.median)}，${Math.round(totals.within1h * 100)}% 在 1 小時內回覆${totals.estimated ? `（其中 ${totals.estimated} 次是依對話節奏估計）` : ''}。`);
     if (totals.over4h) insights.push(`有 ${totals.over4h} 次讓客人等超過 4 小時，客人很可能已經找別家了。`);
     const slow = byHour.filter((h) => h.answered >= 3 && h.median > Math.max(30, (totals.median || 0) * 2));
     if (slow.length) insights.push(`${slow.map((h) => `${h.hour} 點`).join('、')}收到的訊息回得特別慢，這些時段請安排人手。`);
   }
-  if (totals.pending) insights.push(`還有 ${totals.pending} 段對話客服尚未回覆（或回覆後沒按「已回覆」）。`);
 
   return { from, to, businessHours: config.businessHours, totals, byBrand, byStaff, byHour, insights };
 }
