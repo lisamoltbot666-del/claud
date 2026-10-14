@@ -63,7 +63,7 @@ let currentTab = 'focus';
 function showTab(tab) {
   currentTab = tab;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'dispatch', 'templates', 'brands', 'accounts', 'search']) $(`#tab-${t}`).hidden = t !== tab;
+  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'dispatch', 'templates', 'report', 'brands', 'accounts', 'search']) $(`#tab-${t}`).hidden = t !== tab;
   guard(LOADERS[tab]);
 }
 
@@ -806,6 +806,119 @@ async function openDispatch(orderId) {
   currentCustomerId = returnTo;
 }
 
+// ---------- 營收報表 ----------
+let reportRange = 'month';
+const pct = (x) => `${Math.round(x * 100)}%`;
+function reportPeriod() {
+  if ($('#report-from').value || $('#report-to').value) return [$('#report-from').value || $('#report-to').value, $('#report-to').value || $('#report-from').value];
+  const [y, m] = TODAY.split('-').map(Number);
+  const first = (yy, mm) => new Date(Date.UTC(yy, mm - 1, 1)).toISOString().slice(0, 10);
+  const last = (yy, mm) => new Date(Date.UTC(yy, mm, 0)).toISOString().slice(0, 10);
+  // 整個月／整年（包含已經預約、還沒到用車日的行程）
+  if (reportRange === 'last') return [first(y, m - 1), last(y, m - 1)];
+  if (reportRange === '3m') return [first(y, m - 2), last(y, m)];
+  if (reportRange === 'year') return [`${y}-01-01`, `${y}-12-31`];
+  return [first(y, m), last(y, m)];
+}
+document.querySelectorAll('#report-range button').forEach((b) => b.addEventListener('click', () => {
+  reportRange = b.dataset.range;
+  $('#report-from').value = ''; $('#report-to').value = '';
+  document.querySelectorAll('#report-range button').forEach((x) => x.classList.toggle('active', x === b));
+  guard(loadReport);
+}));
+['#report-from', '#report-to'].forEach((s) => $(s).addEventListener('change', () => { document.querySelectorAll('#report-range button').forEach((x) => x.classList.remove('active')); guard(loadReport); }));
+
+// 近 12 個月營業額直條圖（單一系列）：滑過顯示月份、營業額、訂單數；最高與最近一個月直接標數字
+function revenueChart(monthly) {
+  const W = 720; const H = 220; const top = 22; const bottom = 26; const left = 4; const right = 4;
+  const max = Math.max(1, ...monthly.map((m) => m.revenue));
+  const band = (W - left - right) / monthly.length;
+  const barW = Math.min(24, band * 0.6);
+  const y = (v) => top + (H - top - bottom) * (1 - v / max);
+  const peak = monthly.reduce((a, b) => (b.revenue > a.revenue ? b : a), monthly[0]);
+  const short = (n) => (n >= 10000 ? `${Math.round(n / 1000) / 10}萬` : n.toLocaleString());
+  const bars = monthly.map((m, i) => {
+    const cx = left + band * i + band / 2;
+    const h = Math.max(0, H - bottom - y(m.revenue));
+    const x = cx - barW / 2;
+    const yy = H - bottom - h;
+    const r = Math.min(4, h);
+    // 上方圓角 4px、底部貼齊基線
+    const path = h > 0 ? `M${x},${H - bottom} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + barW - r} Q${x + barW},${yy} ${x + barW},${yy + r} V${H - bottom} Z` : '';
+    const showLabel = m.revenue > 0 && (m === peak || i === monthly.length - 1);
+    return `<g class="band" tabindex="0" data-i="${i}" aria-label="${m.month} 營業額 NT$${m.revenue.toLocaleString()}，${m.orders} 筆">
+      <rect x="${left + band * i}" y="${top}" width="${band}" height="${H - top - bottom}" fill="transparent"/>
+      ${path ? `<path class="bar" d="${path}"/>` : ''}
+      ${showLabel ? `<text class="value-label" x="${cx}" y="${yy - 6}" text-anchor="middle">${short(m.revenue)}</text>` : ''}
+      <text class="axis-label" x="${cx}" y="${H - 8}" text-anchor="middle">${Number(m.month.slice(5))}月</text>
+    </g>`;
+  }).join('');
+  return `<div class="chart" id="revenue-chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="近 12 個月營業額">
+    <line class="gridline" x1="${left}" x2="${W - right}" y1="${H - bottom}" y2="${H - bottom}"/>
+    <line class="gridline" x1="${left}" x2="${W - right}" y1="${y(max)}" y2="${y(max)}" stroke-dasharray="2 4"/>
+    <text class="axis-label" x="${W - right}" y="${y(max) - 4}" text-anchor="end">NT$${short(max)}</text>
+    ${bars}</svg><div class="chart-tip" hidden></div></div>`;
+}
+function bindChartTips(monthly) {
+  const chart = $('#revenue-chart');
+  if (!chart) return;
+  const tip = chart.querySelector('.chart-tip');
+  const show = (g) => {
+    const m = monthly[Number(g.dataset.i)];
+    const box = g.getBoundingClientRect();
+    const host = chart.getBoundingClientRect();
+    tip.innerHTML = `<strong>${esc(m.month)}</strong><br>營業額 ${money(m.revenue)}<br><span class="muted">訂單 ${m.orders} 筆</span>`;
+    tip.style.left = `${box.left - host.left + box.width / 2}px`;
+    tip.style.top = `${g.querySelector('.bar')?.getBoundingClientRect().top - host.top || box.height / 2}px`;
+    tip.hidden = false;
+  };
+  chart.querySelectorAll('.band').forEach((g) => {
+    g.addEventListener('mouseenter', () => show(g));
+    g.addEventListener('focus', () => show(g));
+    g.addEventListener('mouseleave', () => { tip.hidden = true; });
+    g.addEventListener('blur', () => { tip.hidden = true; });
+  });
+}
+
+async function loadReport() {
+  const [from, to] = reportPeriod();
+  const r = await api(`/api/report?${new URLSearchParams({ from, to, ...(currentBrand ? { brand: currentBrand } : {}) })}`);
+  const t = r.totals;
+  const maxBrand = Math.max(1, ...r.byBrand.map((b) => b.revenue));
+  const brandsInTable = BRANDS.filter((b) => !currentBrand || String(b.id) === String(currentBrand));
+  $('#report-body').innerHTML = `
+    <p class="muted">期間：${esc(r.from)} ～ ${esc(r.to)}</p>
+    <div class="tiles">
+      <div class="tile"><div class="label">營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">已付款 ${t.paid_orders} 筆</div></div>
+      <div class="tile"><div class="label">訂單數</div><div class="value">${t.orders}</div><div class="sub">另有取消 ${t.cancelled} 筆</div></div>
+      <div class="tile"><div class="label">平均客單價</div><div class="value">${money(t.avg_order)}</div><div class="sub">&nbsp;</div></div>
+      <div class="tile"><div class="label">待收款</div><div class="value">${money(t.receivable)}</div><div class="sub">${t.receivable_orders} 筆待付款</div></div>
+      <div class="tile"><div class="label">客人數</div><div class="value">${t.customers}</div><div class="sub">新客 ${t.new_customers}・回頭客 ${t.repeat_customers}</div></div>
+      <div class="tile"><div class="label">回頭客比例</div><div class="value">${pct(t.repeat_rate)}</div><div class="sub">之前也訂過的客人</div></div>
+    </div>
+
+    <h3>近 12 個月營業額</h3>
+    <div class="card">${revenueChart(r.monthly)}</div>
+
+    <h3>各品牌</h3>
+    <div class="table-wrap"><table><thead><tr><th>品牌</th><th>營業額</th><th></th><th>訂單</th><th>客人</th><th>回頭客比例</th><th>待收款</th></tr></thead><tbody>
+      ${r.byBrand.map((b) => `<tr><td>${brandTag(b.brand_id)}</td><td>${money(b.revenue)}</td><td style="width:30%"><div class="meter" style="width:${(b.revenue / maxBrand) * 100}%"></div></td><td>${b.orders}</td><td>${b.customers}</td><td>${pct(b.customers ? b.repeat_customers / b.customers : 0)}</td><td>${money(b.receivable)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">這段期間沒有訂單</td></tr>'}
+    </tbody></table></div>
+
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+      <div><h3>各服務</h3><div class="table-wrap"><table><thead><tr><th>服務</th><th>訂單</th><th>營業額</th></tr></thead><tbody>
+        ${r.byService.map((s) => `<tr><td>${esc(s.label)}</td><td>${s.orders}</td><td>${money(s.revenue)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">—</td></tr>'}</tbody></table></div></div>
+      <div><h3>消費前 10 名</h3><div class="table-wrap"><table><thead><tr><th>客戶</th><th>訂單</th><th>營業額</th></tr></thead><tbody>
+        ${r.topCustomers.map((c) => `<tr class="clickable" data-open="${c.customer_id}"><td>${brandTag(c.brand_id)}${esc(c.real_name || c.display_name)}</td><td>${c.orders}</td><td>${money(c.revenue)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">—</td></tr>'}</tbody></table></div></div>
+    </div>
+
+    <h3>每月明細</h3>
+    <div class="table-wrap"><table><thead><tr><th>月份</th><th>營業額</th><th>訂單</th>${brandsInTable.map((b) => `<th>${esc(b.name)}</th>`).join('')}</tr></thead><tbody>
+      ${[...r.monthly].reverse().map((m) => `<tr><td>${esc(m.month)}</td><td>${money(m.revenue)}</td><td>${m.orders}</td>${brandsInTable.map((b) => `<td>${m.brands[b.id] ? `${money(m.brands[b.id].revenue)}<div class="muted">${m.brands[b.id].orders} 筆</div>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`).join('')}
+    </tbody></table></div>`;
+  bindChartTips(r.monthly);
+}
+
 // ---------- 常用回覆範本 ----------
 let TEMPLATE_VARS = {};
 async function loadTemplates() {
@@ -917,5 +1030,5 @@ $('#change-password').addEventListener('click', () => guard(async () => {
   location.href = '/login';
 }));
 
-const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, dispatch: loadDispatch, templates: loadTemplates, brands: loadBrands, accounts: loadAccounts, search: loadSearch };
+const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, dispatch: loadDispatch, templates: loadTemplates, report: loadReport, brands: loadBrands, accounts: loadAccounts, search: loadSearch };
 guard(async () => { await loadStatus(); await loadFocus(); });
