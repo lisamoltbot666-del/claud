@@ -393,7 +393,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     // ---------- 營收報表（管理員）----------
     ['GET', /^\/api\/report$/, (_m, _b, url) => {
       const t = today(config.tz);
-      return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url) }));
+      return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), granularity: url.searchParams.get('g') || 'auto' }));
     }, { admin: true }],
     // ---------- 常用回覆範本 ----------
     ['GET', /^\/api\/templates$/, (_m, _b, url) => ({ templates: listTemplates(store, { brandId: brandParam(url) }), vars: TEMPLATE_VARS })],

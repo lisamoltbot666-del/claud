@@ -1,3 +1,4 @@
+import { bucketKey, listBuckets, resolveGranularity } from './buckets.js';
 import { SERVICE_TYPES } from './db.js';
 
 // 營收報表：以用車日（沒有用車日則用下單日）歸屬期間。
@@ -7,18 +8,7 @@ import { SERVICE_TYPES } from './db.js';
 const PAID = "('paid','shipped','completed')";
 const DAY = "COALESCE(o.service_date, o.order_date)";
 
-const monthKey = (d) => d.slice(0, 7);
-function lastMonths(endDate, n) {
-  const [y, m] = endDate.split('-').map(Number);
-  const out = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(y, m - 1 - i, 1));
-    out.push(d.toISOString().slice(0, 7));
-  }
-  return out;
-}
-
-export function buildReport(store, { from, to, brandId = null }) {
+export function buildReport(store, { from, to, brandId = null, granularity = 'auto' }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('日期格式需為 YYYY-MM-DD');
   if (from > to) [from, to] = [to, from];
   const bWhere = brandId ? ' AND c.brand_id = ?' : '';
@@ -65,25 +55,23 @@ export function buildReport(store, { from, to, brandId = null }) {
      ${base} GROUP BY o.customer_id ORDER BY revenue DESC, orders DESC LIMIT 10`, ...args,
   );
 
-  // 近 12 個月（到期間結束的月份），每月營業額與訂單數；各品牌分列供明細表
-  const months = lastMonths(to, 12);
-  const mFrom = `${months[0]}-01`;
-  const mTo = `${months.at(-1)}-31`;
-  const rows = store.all(
-    `SELECT substr(${DAY}, 1, 7) AS month, c.brand_id, COUNT(*) AS orders, COALESCE(SUM(CASE WHEN o.status IN ${PAID} THEN o.amount END), 0) AS revenue
-     FROM orders o JOIN customers c ON c.id = o.customer_id
-     WHERE o.status != 'cancelled' AND ${DAY} BETWEEN ? AND ?${bWhere}
-     GROUP BY month, c.brand_id`, mFrom, mTo, ...bArgs,
+  // 趨勢：依「日／週／月」切區間，每個區間的營業額與訂單數，並分列各品牌
+  const g = resolveGranularity(granularity, from, to);
+  const daily = store.all(
+    `SELECT ${DAY} AS day, c.brand_id, COUNT(*) AS orders, COALESCE(SUM(CASE WHEN o.status IN ${PAID} THEN o.amount END), 0) AS revenue
+     ${base} GROUP BY day, c.brand_id`, ...args,
   );
-  const monthly = months.map((m) => {
-    const list = rows.filter((r) => r.month === m);
-    return {
-      month: m,
-      orders: list.reduce((s, r) => s + r.orders, 0),
-      revenue: list.reduce((s, r) => s + r.revenue, 0),
-      brands: Object.fromEntries(list.map((r) => [r.brand_id, { orders: r.orders, revenue: r.revenue }])),
-    };
-  });
+  const series = listBuckets(from, to, g).map((b) => ({ ...b, orders: 0, revenue: 0, brands: {} }));
+  const byKey = new Map(series.map((b) => [b.key, b]));
+  for (const r of daily) {
+    const b = byKey.get(bucketKey(r.day, g));
+    if (!b) continue;
+    b.orders += r.orders;
+    b.revenue += r.revenue;
+    const x = (b.brands[r.brand_id] ||= { orders: 0, revenue: 0 });
+    x.orders += r.orders;
+    x.revenue += r.revenue;
+  }
 
-  return { from, to, totals, byBrand, byService, topCustomers, monthly, monthKey: monthKey(to) };
+  return { from, to, granularity: g, totals, byBrand, byService, topCustomers, series };
 }
