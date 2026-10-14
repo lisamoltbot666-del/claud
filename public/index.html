@@ -15,6 +15,7 @@
       <button data-tab="repurchase">回訪</button>
       <button data-tab="customers">客戶</button>
       <button data-tab="orders">訂單</button>
+      <button data-tab="templates">範本</button>
       <button data-tab="brands">品牌</button>
       <button data-tab="accounts" class="admin-only">帳號</button>
     </nav>
@@ -77,6 +78,12 @@
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
     </section>
+    <section id="tab-templates" hidden>
+      <div class="toolbar"><h2>常用回覆範本</h2><span class="spacer"></span><button id="new-template">新增範本</button></div>
+      <p class="muted">在客戶資料的「發送 LINE 訊息」可以一鍵套用。內容裡的 <code>{姓名}</code>、<code>{用車日}</code> 等欄位會自動換成這位客戶和他最近一筆行程的資料；左上角選了品牌時，只顯示該品牌與共用的範本。</p>
+      <div id="template-list"></div>
+    </section>
+
     <section id="tab-accounts" hidden>
       <div class="toolbar"><h2>帳號管理</h2><span class="spacer"></span><button id="new-user">新增帳號</button></div>
       <p class="muted">每位客服用自己的帳號登入，系統會記錄誰傳了訊息、誰改了訂單。「管理員」可以管理品牌、帳號、匯入與備份；「客服」只能處理客戶與訂單。老闆帳號 <code>admin</code> 的密碼是 Render 上的 ADMIN_PASSWORD。</p>

@@ -63,7 +63,7 @@ let currentTab = 'focus';
 function showTab(tab) {
   currentTab = tab;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'brands', 'accounts', 'search']) $(`#tab-${t}`).hidden = t !== tab;
+  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'templates', 'brands', 'accounts', 'search']) $(`#tab-${t}`).hidden = t !== tab;
   guard(LOADERS[tab]);
 }
 
@@ -335,6 +335,7 @@ async function openCustomer(id, compose = null) {
       <button class="small secondary" data-template="reorder">回訪邀請</button>
       <button class="small secondary" data-template="care">關心問候</button>
       <button class="small secondary" data-template="birthday">生日祝福</button>
+      <select id="custom-template" class="small"><option value="">常用範本…</option></select>
     </div>
     <form id="send-form">
       <textarea name="text" placeholder="輸入訊息，或點上方按鈕套用範本"></textarea>
@@ -426,6 +427,21 @@ async function openCustomer(id, compose = null) {
     await api(`/api/customers/${id}/send`, { method: 'POST', body: f });
     toast('已推播'); openCustomer(id);
   }); };
+  guard(async () => {
+    const { templates } = await api(`/api/templates?brand=${c.brand_id}`);
+    $('#custom-template').innerHTML = `<option value="">常用範本…（${templates.length}）</option>${templates.map((t) => `<option value="${t.id}">${esc(t.title)}${t.brand_id ? '' : '（共用）'}</option>`).join('')}`;
+  });
+  $('#custom-template').onchange = (e) => guard(async () => {
+    if (!e.target.value) return;
+    const r = await api(`/api/customers/${id}/templates/${e.target.value}`);
+    const f = $('#send-form');
+    f.text.value = r.text;
+    f.kind.value = 'custom';
+    f.orderId.value = r.orderId || '';
+    f.text.focus();
+    if (r.missing.length) toast(`這位客戶沒有：${r.missing.join('、')}，送出前請檢查內容`, true);
+    e.target.value = '';
+  });
   $('#mark-handled').onclick = () => guard(async () => { await api(`/api/customers/${id}/handled`, { method: 'POST' }); toast('已標記'); });
   if (compose) await applyTemplate(id, compose.kind, compose.orderId);
 }
@@ -669,6 +685,57 @@ document.addEventListener('click', (e) => {
   if (t.dataset.open) return guard(() => openCustomer(Number(t.dataset.open)));
 });
 
+// ---------- 常用回覆範本 ----------
+let TEMPLATE_VARS = {};
+async function loadTemplates() {
+  const { templates, vars } = await api(`/api/templates?${brandQs()}`);
+  TEMPLATE_VARS = vars;
+  $('#template-list').innerHTML = templates.map((t) => `<div class="card">
+      <div class="row">${t.brand_id ? brandTag(t.brand_id) : '<span class="badge">全部品牌</span>'}<strong>${esc(t.title)}</strong>
+        <span class="spacer"></span><span class="muted">${t.updated_by ? `${esc(t.updated_by)} 修改於 ${fmtTime(t.updated_at)}` : ''}</span>
+        <button class="small secondary" data-tpl-edit="${t.id}">編輯</button><button class="small danger" data-tpl-del="${t.id}">刪除</button></div>
+      <div class="muted" style="white-space:pre-wrap;margin-top:6px">${esc(t.body)}</div>
+    </div>`).join('') || '<div class="card empty">還沒有範本，按右上角「新增範本」</div>';
+  document.querySelectorAll('[data-tpl-edit]').forEach((b) => b.onclick = () => editTemplate(templates.find((t) => t.id === Number(b.dataset.tplEdit))));
+  document.querySelectorAll('[data-tpl-del]').forEach((b) => b.onclick = () => guard(async () => {
+    if (!confirm('確定刪除這個範本？')) return;
+    await api(`/api/templates/${b.dataset.tplDel}`, { method: 'DELETE' });
+    loadTemplates();
+  }));
+}
+
+function editTemplate(t = {}) {
+  const dlg = $('#drawer');
+  $('#drawer-body').innerHTML = `<div class="row"><h2>${t.id ? '編輯範本' : '新增範本'}</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
+    <form id="tpl-form" class="grid" style="margin-top:12px">
+      <label>範本名稱<input name="title" required maxlength="60" value="${esc(t.title || '')}"></label>
+      <label>適用品牌<select name="brand_id"><option value="">全部品牌共用</option>${BRANDS.map((b) => `<option value="${b.id}" ${b.id === t.brand_id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select></label>
+      <label class="wide">內容<textarea name="body" required style="min-height:160px">${esc(t.body || '')}</textarea></label>
+      <div class="wide" style="grid-column:1/-1"><span class="muted">點一下插入欄位：</span>${Object.entries(TEMPLATE_VARS).map(([k, v]) => `<button type="button" class="small secondary" data-var="${esc(k)}" title="${esc(v)}" style="margin:2px">{${esc(k)}}</button>`).join('')}</div>
+      <div class="row" style="grid-column:1/-1"><button type="submit">儲存</button></div>
+    </form>`;
+  if (!dlg.open) dlg.showModal();
+  $('#close-drawer').onclick = () => dlg.close();
+  const ta = $('#tpl-form [name=body]');
+  document.querySelectorAll('[data-var]').forEach((b) => b.onclick = () => {
+    const ins = `{${b.dataset.var}}`;
+    const [s, e] = [ta.selectionStart, ta.selectionEnd];
+    ta.value = ta.value.slice(0, s) + ins + ta.value.slice(e);
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = s + ins.length;
+  });
+  $('#tpl-form').onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    const body = Object.fromEntries(new FormData(e.target));
+    await api(t.id ? `/api/templates/${t.id}` : '/api/templates', { method: t.id ? 'PATCH' : 'POST', body });
+    toast('已儲存');
+    dlg.close();
+  }); };
+}
+$('#new-template').addEventListener('click', () => guard(async () => {
+  if (!Object.keys(TEMPLATE_VARS).length) TEMPLATE_VARS = (await api('/api/templates')).vars;
+  editTemplate({ brand_id: currentBrand ? Number(currentBrand) : null });
+}));
+
 // ---------- 帳號管理 ----------
 async function loadAccounts() {
   const [users, activity] = await Promise.all([api('/api/users'), api(`/api/activity?${new URLSearchParams({ user: $('#activity-user').value })}`)]);
@@ -729,5 +796,5 @@ $('#change-password').addEventListener('click', () => guard(async () => {
   location.href = '/login';
 }));
 
-const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, brands: loadBrands, accounts: loadAccounts, search: loadSearch };
+const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, templates: loadTemplates, brands: loadBrands, accounts: loadAccounts, search: loadSearch };
 guard(async () => { await loadStatus(); await loadFocus(); });

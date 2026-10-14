@@ -132,6 +132,17 @@ CREATE TABLE IF NOT EXISTS activity (
   detail TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_activity_customer ON activity(customer_id, id);
+
+-- 常用回覆範本（brand_id 空白 = 全部品牌共用）
+CREATE TABLE IF NOT EXISTS reply_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER REFERENCES brands(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  updated_by TEXT,
+  updated_at TEXT
+);
 `;
 
 export const ORDER_STATUSES = {

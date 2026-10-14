@@ -13,6 +13,7 @@ import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
 import { Auth, ROLES } from './auth.js';
 import { findDuplicates, mergeCustomers } from './merge.js';
 import { search } from './search.js';
+import { TEMPLATE_VARS, listTemplates, renderTemplate, saveTemplate, seedTemplates } from './templates.js';
 import { LineRegistry, verifySignature } from './line.js';
 import { ReminderService, brandInfo, startScheduler, templates } from './reminders.js';
 import { WebhookHandler } from './webhook.js';
@@ -120,6 +121,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
   const webhook = new WebhookHandler({ store, lines, logger, autoReply: config.autoReply });
   const reminders = new ReminderService({ store, lines, config, logger });
   const auth = new Auth({ store, config });
+  seedTemplates(store);
   // 操作紀錄
   const log = (req, action, { customerId = null, orderId = null, detail = null } = {}) => store.logActivity({ user: req.user, action, customerId, orderId, detail });
   const label = (c) => (c ? c.real_name || c.display_name || `客戶#${c.id}` : '');
@@ -332,6 +334,28 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       log(req, '手動推播每日清單');
       return reminders.runDaily(new Date(), { baseUrl: `http://${req.headers.host}` });
     }],
+    // ---------- 常用回覆範本 ----------
+    ['GET', /^\/api\/templates$/, (_m, _b, url) => ({ templates: listTemplates(store, { brandId: brandParam(url) }), vars: TEMPLATE_VARS })],
+    ['POST', /^\/api\/templates$/, (_m, body, _u, req) => {
+      const tpl = badRequest(() => saveTemplate(store, null, body, req.user.display_name));
+      log(req, '新增範本', { detail: tpl.title });
+      return tpl;
+    }],
+    ['PATCH', /^\/api\/templates\/(\d+)$/, ([, id], body, _u, req) => {
+      const tpl = badRequest(() => saveTemplate(store, toId(id), body, req.user.display_name));
+      log(req, '修改範本', { detail: tpl.title });
+      return tpl;
+    }],
+    ['DELETE', /^\/api\/templates\/(\d+)$/, ([, id], _b, _u, req) => {
+      const tpl = store.get('SELECT * FROM reply_templates WHERE id = ?', toId(id));
+      if (!tpl) throw new HttpError(404, '找不到範本');
+      store.run('DELETE FROM reply_templates WHERE id = ?', tpl.id);
+      log(req, '刪除範本', { detail: tpl.title });
+      return { ok: true };
+    }],
+    ['GET', /^\/api\/customers\/(\d+)\/templates\/(\d+)$/, ([, id, tid], _b, url) => badRequest(() => renderTemplate(store, config, {
+      templateId: toId(tid), customerId: mustCustomer(toId(id)).id, orderId: url.searchParams.get('orderId') ? toId(url.searchParams.get('orderId')) : null,
+    }))],
     // ---------- 帳號與操作紀錄 ----------
     ['GET', /^\/api\/users$/, () => auth.listUsers(), { admin: true }],
     ['POST', /^\/api\/users$/, (_m, body, _u, req) => {
