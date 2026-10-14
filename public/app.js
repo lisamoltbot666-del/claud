@@ -56,9 +56,11 @@ async function guard(fn) {
 
 // ---------- tabs ----------
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+let currentTab = 'focus';
 function showTab(tab) {
+  currentTab = tab;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'brands']) $(`#tab-${t}`).hidden = t !== tab;
+  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'brands', 'search']) $(`#tab-${t}`).hidden = t !== tab;
   guard(LOADERS[tab]);
 }
 
@@ -124,6 +126,57 @@ $('#run-daily').addEventListener('click', () => guard(async () => {
   toast(`已通知 ${r.staffNotified} 位客服，自動匯款提醒 ${r.paymentSent} 則、行程確認 ${r.tripSent} 則、回訪邀請 ${r.reorderSent} 則`);
   loadFocus();
 }));
+
+// ---------- 全站搜尋 ----------
+// 把搜尋字標黃：先跳脫 HTML，再標記
+const hl = (text, q) => {
+  const safe = esc(text);
+  if (!q) return safe;
+  const pat = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return safe.replace(new RegExp(pat, 'gi'), (m) => `<mark>${m}</mark>`);
+};
+let lastSearch = null;
+
+async function loadSearch() {
+  if (!lastSearch) return;
+  const { q, from, to } = lastSearch;
+  const qs = new URLSearchParams({ q, from, to });
+  if (currentBrand) qs.set('brand', currentBrand);
+  const r = await api(`/api/search?${qs}`);
+  const range = r.from ? (r.from === r.to ? r.from : `${r.from} ～ ${r.to}`) : '';
+  $('#search-title').textContent = `搜尋結果：${[q && `「${q}」`, range && `用車日 ${range}`].filter(Boolean).join('，')}`;
+  const custRows = r.customers.map((c) => `<tr class="clickable" data-open="${c.id}">
+    <td>${brandTag(c.brand_id)}${hl(nameOf(c), q)}${c.real_name && c.display_name && c.real_name !== c.display_name ? `<div class="muted">${hl(c.display_name, q)}</div>` : ''}</td>
+    <td>${hl(c.phone, q)}</td><td>${hl(c.tags, q)}</td><td class="muted">${hl(c.note, q)}</td><td>${c.order_count}</td><td>${esc(c.last_trip || '')}</td></tr>`).join('');
+  const orderRows = r.orders.map((o) => `<tr class="clickable" data-open="${o.customer_id}">
+    <td>#${o.id}</td><td>${esc(tripWhen(o) || o.order_date)}</td><td>${brandTag(o.brand_id)}${hl(o.real_name || o.display_name, q)}<div class="muted">${hl(o.phone, q)}</div></td>
+    <td>${esc(SERVICES[o.service_type] || '')}<div class="muted">${hl(o.items, q)}</div></td>
+    <td class="muted">${o.flight_no ? `✈ ${hl(o.flight_no, q)}｜` : ''}${hl([o.pickup, o.dropoff].filter(Boolean).join(' → '), q)}${o.note ? `<div>${hl(o.note, q)}</div>` : ''}</td>
+    <td>${money(o.amount)}</td><td>${esc(STATUSES[o.status] || o.status)}</td></tr>`).join('');
+  const msgRows = r.messages.map((m) => `<tr class="clickable" data-open="${m.customer_id}">
+    <td>${fmtTime(m.created_at)}</td><td>${brandTag(m.brand_id)}${esc(m.real_name || m.display_name)}</td><td>${m.direction === 'in' ? '客人' : '我方'}</td><td>${hl(m.text, q)}</td></tr>`).join('');
+  const total = r.customers.length + r.orders.length + r.messages.length;
+  $('#search-results').innerHTML = total ? `
+    ${r.customers.length ? `<div class="result-group"><h3>客戶（${r.customers.length}）</h3><div class="table-wrap"><table><thead><tr><th>名稱</th><th>電話</th><th>標籤</th><th>備註</th><th>訂單數</th><th>最近用車</th></tr></thead><tbody>${custRows}</tbody></table></div></div>` : ''}
+    ${r.orders.length ? `<div class="result-group"><h3>訂單（${r.orders.length}）</h3><div class="table-wrap"><table><thead><tr><th>#</th><th>用車</th><th>客戶</th><th>服務</th><th>行程</th><th>金額</th><th>狀態</th></tr></thead><tbody>${orderRows}</tbody></table></div></div>` : ''}
+    ${r.messages.length ? `<div class="result-group"><h3>對話（${r.messages.length}）</h3><div class="table-wrap"><table><thead><tr><th>時間</th><th>客戶</th><th></th><th>內容</th></tr></thead><tbody>${msgRows}</tbody></table></div></div>` : ''}`
+    : '<div class="card empty">找不到符合的資料</div>';
+}
+
+$('#search-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const q = $('#search-q').value.trim();
+  const from = $('#search-from').value;
+  const to = $('#search-to').value;
+  if (!q && !from && !to) return toast('請輸入關鍵字或選擇日期', true);
+  lastSearch = { q, from, to };
+  showTab('search');
+});
+$('#search-clear').addEventListener('click', () => {
+  lastSearch = null;
+  $('#search-q').value = ''; $('#search-from').value = ''; $('#search-to').value = '';
+  showTab('focus');
+});
 
 // ---------- repurchase ----------
 let repurchaseFilter = 'due';
@@ -529,8 +582,7 @@ $('#brand-switch').addEventListener('change', (e) => {
 
 $('#drawer').addEventListener('close', () => { currentCustomerId = null; refreshCurrentTab(); });
 function refreshCurrentTab() {
-  const tab = document.querySelector('nav button.active').dataset.tab;
-  guard(LOADERS[tab]);
+  guard(LOADERS[currentTab]);
 }
 
 // 共用的點擊事件
@@ -552,5 +604,5 @@ document.addEventListener('click', (e) => {
   if (t.dataset.open) return guard(() => openCustomer(Number(t.dataset.open)));
 });
 
-const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, brands: loadBrands };
+const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, brands: loadBrands, search: loadSearch };
 guard(async () => { await loadStatus(); await loadFocus(); });

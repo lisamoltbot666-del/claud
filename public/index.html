@@ -17,6 +17,13 @@
       <button data-tab="orders">訂單</button>
       <button data-tab="brands">品牌</button>
     </nav>
+    <form id="search-form" class="search-bar" role="search">
+      <input id="search-q" type="search" placeholder="搜尋客戶、電話、航班、地點、對話、#訂單號…" aria-label="搜尋">
+      <input id="search-from" type="date" title="用車日（從）" aria-label="從">
+      <span class="muted">～</span>
+      <input id="search-to" type="date" title="用車日（到）" aria-label="到">
+      <button type="submit">搜尋</button>
+    </form>
     <div id="status" class="muted"></div>
   </header>
 
@@ -66,6 +73,10 @@
         <a class="button secondary" id="export-orders" href="/api/export/orders.csv">匯出訂單 CSV</a>
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
+    </section>
+    <section id="tab-search" hidden>
+      <div class="toolbar"><h2 id="search-title">搜尋結果</h2><span class="spacer"></span><button id="search-clear" class="secondary">清除搜尋</button></div>
+      <div id="search-results"></div>
     </section>
     <section id="tab-brands" hidden>
       <div class="toolbar">
