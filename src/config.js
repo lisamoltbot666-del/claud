@@ -34,6 +34,8 @@ export function getConfig(env = process.env) {
     autoReorderReminder: bool(env.AUTO_REORDER_REMINDER),
     // 客人傳「查訂單」、匯款通知時是否自動回覆；預設關閉，系統只記錄不回覆
     autoReply: bool(env.AUTO_REPLY),
+    // 是否接受 HTTP Basic 登入（僅供程式串接或測試；瀏覽器請用登入頁）
+    basicAuth: bool(env.BASIC_AUTH),
     autoTripReminder: bool(env.AUTO_TRIP_REMINDER),
     bankInfo: env.BANK_INFO || '',
     shopName: env.SHOP_NAME || '本店',

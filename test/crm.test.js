@@ -28,7 +28,7 @@ function fakeLine() {
 const B = 1; // 測試用的第一個品牌 id
 
 function setup(env = {}) {
-  const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw', DEFAULT_REORDER_DAYS: '30', ...env });
+  const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw', BASIC_AUTH: 'true', DEFAULT_REORDER_DAYS: '30', ...env });
   const store = openDb(':memory:');
   store.createBrand({ slug: 'shop', name: '測試店', channel_secret: 'sec', channel_access_token: 'tok', bank_info: '000-123' });
   const line = fakeLine();

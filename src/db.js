@@ -101,6 +101,37 @@ CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- 後台帳號（老闆帳號 admin 用 ADMIN_PASSWORD，不存在這裡）
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'staff',  -- admin | staff
+  active INTEGER NOT NULL DEFAULT 1,
+  last_login_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,            -- 0 = 老闆帳號 admin
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- 操作紀錄：誰在什麼時候做了什麼
+CREATE TABLE IF NOT EXISTS activity (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  user_name TEXT,
+  action TEXT NOT NULL,
+  customer_id INTEGER,
+  order_id INTEGER,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_activity_customer ON activity(customer_id, id);
 `;
 
 export const ORDER_STATUSES = {
@@ -136,6 +167,10 @@ export function openDb(dbPath) {
   db.exec(customersTable('customers'));
   migrateTripColumns(db);
   db.exec(SCHEMA);
+  // 對話、提醒記錄由哪位客服送出
+  for (const table of ['messages', 'reminders']) {
+    if (!db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === 'staff_name')) db.exec(`ALTER TABLE ${table} ADD COLUMN staff_name TEXT`);
+  }
   // 匯入的訂單記錄來源編號，重複匯入同一份檔案時不會重複建立
   if (!db.prepare('PRAGMA table_info(orders)').all().some((r) => r.name === 'import_ref')) db.exec('ALTER TABLE orders ADD COLUMN import_ref TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_import_ref ON orders(import_ref) WHERE import_ref IS NOT NULL');
@@ -331,9 +366,9 @@ export class Store {
 
   // ---------- messages ----------
   // 客服送出的訊息會把客戶標成「已處理」；自動回覆則傳 { handled: false }
-  addMessage(customerId, direction, text, type = 'text', { handled = direction === 'out' } = {}) {
+  addMessage(customerId, direction, text, type = 'text', { handled = direction === 'out', staffName = null } = {}) {
     const ts = nowIso();
-    this.run('INSERT INTO messages (customer_id, direction, type, text, created_at) VALUES (?, ?, ?, ?, ?)', customerId, direction, type, text, ts);
+    this.run('INSERT INTO messages (customer_id, direction, type, text, created_at, staff_name) VALUES (?, ?, ?, ?, ?, ?)', customerId, direction, type, text, ts, staffName);
     if (direction === 'in') this.run('UPDATE customers SET last_inbound_at = ? WHERE id = ?', ts, customerId);
     else if (handled) this.run('UPDATE customers SET last_handled_at = ? WHERE id = ?', ts, customerId);
   }
@@ -404,11 +439,25 @@ export class Store {
   }
 
   // ---------- reminders ----------
-  logReminder({ customerId, orderId = null, kind, text, ok = true, error = null, auto = false }) {
+  logReminder({ customerId, orderId = null, kind, text, ok = true, error = null, auto = false, staffName = null }) {
     this.run(
-      'INSERT INTO reminders (customer_id, order_id, kind, text, ok, error, auto) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      customerId, orderId, kind, text, ok ? 1 : 0, error, auto ? 1 : 0,
+      'INSERT INTO reminders (customer_id, order_id, kind, text, ok, error, auto, staff_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      customerId, orderId, kind, text, ok ? 1 : 0, error, auto ? 1 : 0, staffName,
     );
+  }
+
+  // ---------- 操作紀錄 ----------
+  logActivity({ user = null, action, customerId = null, orderId = null, detail = null }) {
+    this.run('INSERT INTO activity (user_name, action, customer_id, order_id, detail) VALUES (?, ?, ?, ?, ?)',
+      user?.display_name ?? user ?? null, action, customerId, orderId, detail);
+  }
+
+  listActivity({ customerId = null, userName = null, limit = 200 } = {}) {
+    const where = [];
+    const params = [];
+    if (customerId) { where.push('customer_id = ?'); params.push(customerId); }
+    if (userName) { where.push('user_name = ?'); params.push(userName); }
+    return this.all(`SELECT * FROM activity ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`, ...params, limit);
   }
 
   lastReminder(customerId, kind, orderId = null) {
