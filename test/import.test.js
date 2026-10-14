@@ -8,7 +8,7 @@ import { buildFocusList } from '../src/focus.js';
 import { guessMapping, mapServiceType, mapStatus, parseCsv, parseDateTime, parseTime, runImport } from '../src/importer.js';
 import { createApp } from '../src/server.js';
 
-const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw' });
+const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw', BASIC_AUTH: 'true' });
 const T = today('Asia/Taipei');
 const silent = { log() {}, warn() {}, error() {} };
 

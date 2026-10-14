@@ -15,7 +15,7 @@ import { bootstrapBrandFromEnv, createApp, ensureInitialBrands } from '../src/se
 
 const silent = { log() {}, warn() {}, error() {} };
 const T = today('Asia/Taipei');
-const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw' });
+const config = getConfig({ TZ_NAME: 'Asia/Taipei', ADMIN_PASSWORD: 'pw', BASIC_AUTH: 'true' });
 
 // 每個 token 一個假的 LINE client，記錄是用哪個品牌的帳號發出
 function fakeLines() {

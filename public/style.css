@@ -1,4 +1,5 @@
 [hidden] { display: none !important; }
+.role-staff .admin-only { display: none !important; }
 .search-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1 1 420px; }
 .search-bar #search-q { flex: 1 1 220px; }
 .search-bar input[type=date] { width: 9.5em; }
@@ -104,3 +105,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .brand-card form { grid-column: 1 / -1; }
 .ok { color: var(--brand); }
 .warn { color: var(--amber); }
+.login-page { display: flex; justify-content: center; padding-top: 12vh; }
+.login-page form { width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 24px; }
+.login-page h1 { font-size: 20px; margin: 0 0 4px; color: var(--brand); }
+.login-page label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.who { white-space: nowrap; }

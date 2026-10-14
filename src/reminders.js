@@ -110,7 +110,7 @@ export class ReminderService {
   }
 
   // 推播訊息給客戶並記錄
-  async send({ customerId, kind, orderId = null, text, auto = false }) {
+  async send({ customerId, kind, orderId = null, text, auto = false, staffName = auto ? '系統自動' : null }) {
     const c = this.store.getCustomer(customerId);
     if (!c) throw new Error('找不到客戶');
     const order = orderId ? this.store.getOrder(orderId) : null;
@@ -119,17 +119,17 @@ export class ReminderService {
     if (!body) throw new Error('訊息內容為空');
     if (!c.line_user_id || !c.is_friend) {
       const error = '此客戶不是 LINE 好友，無法推播';
-      this.store.logReminder({ customerId, orderId, kind, text: body, ok: false, error, auto });
+      this.store.logReminder({ customerId, orderId, kind, text: body, ok: false, error, auto, staffName });
       throw new Error(error);
     }
     try {
       await line.push(c.line_user_id, body);
     } catch (e) {
-      this.store.logReminder({ customerId, orderId, kind, text: body, ok: false, error: e.message, auto });
+      this.store.logReminder({ customerId, orderId, kind, text: body, ok: false, error: e.message, auto, staffName });
       throw e;
     }
-    this.store.logReminder({ customerId, orderId, kind, text: body, auto });
-    this.store.addMessage(customerId, 'out', body);
+    this.store.logReminder({ customerId, orderId, kind, text: body, auto, staffName });
+    this.store.addMessage(customerId, 'out', body, 'text', { staffName });
     return { text: body };
   }
 

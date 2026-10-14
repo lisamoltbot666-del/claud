@@ -19,6 +19,8 @@ const lastService = (st) => [SERVICES[st.lastOrder?.service_type], st.lastItems]
 const tripWhen = (o) => [o.service_date, o.service_time].filter(Boolean).join(' ');
 const tripRoute = (o) => [o.flight_no ? `✈ ${o.flight_no}` : '', [o.pickup, o.dropoff].filter(Boolean).join(' → '), o.return_date ? `至 ${o.return_date}` : ''].filter(Boolean).map(esc).join('｜');
 let STATUSES = {};
+let ME = {};
+let ROLES = {};
 let SERVICES = {};
 let TODAY = '';
 let BRANDS = [];
@@ -37,6 +39,7 @@ const brandTag = (id) => {
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.login) { location.href = '/login'; throw new Error('請重新登入'); }
   if (!res.ok) throw new Error(data.error || `錯誤 ${res.status}`);
   return data;
 }
@@ -60,7 +63,7 @@ let currentTab = 'focus';
 function showTab(tab) {
   currentTab = tab;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'brands', 'search']) $(`#tab-${t}`).hidden = t !== tab;
+  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'brands', 'accounts', 'search']) $(`#tab-${t}`).hidden = t !== tab;
   guard(LOADERS[tab]);
 }
 
@@ -77,6 +80,11 @@ async function loadStatus() {
   $('#order-status').innerHTML = `<option value="">全部狀態</option>${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}`;
   const missing = BRANDS.filter((b) => !b.has_secret || !b.has_token).length;
   const warn = !BRANDS.length ? '⚠ 尚未建立品牌｜' : missing ? `⚠ ${missing} 個品牌尚未設定 LINE 金鑰｜` : '';
+  ME = s.me;
+  ROLES = s.roles;
+  document.body.classList.toggle('role-staff', ME.role !== 'admin');
+  $('#me').textContent = `👤 ${ME.display_name}（${ROLES[ME.role]}）`;
+  $('#change-password').hidden = !ME.id;
   $('#status').textContent = `${warn}今天 ${s.today}｜每日 ${s.dailyReportHour}:00 推播給 ${s.staffCount} 位客服｜自動匯款提醒：${s.autoPaymentReminder ? '開' : '關'}｜自動行程確認：${s.autoTripReminder ? '開' : '關'}｜自動回訪邀請：${s.autoReorderReminder ? '開' : '關'}`;
 }
 
@@ -210,7 +218,7 @@ async function loadCustomers() {
   $('#customer-table').innerHTML = `<thead><tr><th></th><th>名稱</th><th>電話</th><th>標籤</th><th>訂單數</th><th>累積消費</th><th>最後下單</th><th>最後訊息</th><th>好友</th></tr></thead>
   <tbody>${rows.length ? rows.map((c) => `<tr class="clickable" data-open="${c.id}">
     <td>${c.picture_url ? `<img class="avatar" style="width:28px;height:28px" src="${esc(c.picture_url)}" alt="">` : ''}</td>
-    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">客服</span>' : ''}${c.real_name && c.display_name && c.real_name !== c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
+    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">清單接收人</span>' : ''}${c.real_name && c.display_name && c.real_name !== c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
     <td>${esc(c.phone)}</td><td>${esc(c.tags)}</td><td>${c.order_count}</td><td>${money(c.total_spent)}</td>
     <td>${esc(c.last_order_date || '')}</td><td>${fmtTime(c.last_inbound_at)}</td><td>${c.is_friend ? '✅' : '—'}</td>
   </tr>`).join('') : '<tr><td colspan="9" class="empty">尚無客戶。客戶加入官方帳號好友或傳訊息後會自動出現在這裡。</td></tr>'}</tbody>`;
@@ -250,7 +258,7 @@ $('#order-when').addEventListener('change', () => guard(loadOrders));
 // ---------- customer drawer ----------
 async function openCustomer(id, compose = null) {
   currentCustomerId = id;
-  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates } = await api(`/api/customers/${id}`);
+  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
   const upcomingTrips = orders.filter((o) => o.service_date && o.service_date >= TODAY && ['pending_payment', 'paid', 'shipped'].includes(o.status));
@@ -259,9 +267,9 @@ async function openCustomer(id, compose = null) {
   $('#drawer-body').innerHTML = `
     <div class="row">
       ${c.picture_url ? `<img class="avatar" src="${esc(c.picture_url)}" alt="">` : ''}
-      <div><h2>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">客服</span>' : ''}</h2><div class="muted">${esc(brand?.name || '')} 官方帳號｜${c.line_user_id ? `LINE userId：${esc(c.line_user_id)}` : '手動建立（非 LINE 好友）'}｜${c.is_friend ? '好友' : '非好友／已封鎖'}｜加入 ${fmtTime(c.followed_at || c.created_at)}</div></div>
+      <div><h2>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">清單接收人</span>' : ''}</h2><div class="muted">${esc(brand?.name || '')} 官方帳號｜${c.line_user_id ? `LINE userId：${esc(c.line_user_id)}` : '手動建立（非 LINE 好友）'}｜${c.is_friend ? '好友' : '非好友／已封鎖'}｜加入 ${fmtTime(c.followed_at || c.created_at)}</div></div>
       <span class="spacer"></span>
-      ${canPush ? `<button class="secondary small" id="toggle-staff" title="每天由「${esc(brand?.name || '')}」的官方帳號把關懷清單推播給這位">${c.is_staff ? '取消客服' : '設為客服'}</button>` : ''}
+      ${canPush ? `<button class="secondary small" id="toggle-staff" title="每天由「${esc(brand?.name || '')}」的官方帳號把關懷清單推播給這位">${c.is_staff ? '取消清單接收人' : '設為清單接收人'}</button>` : ''}
       <button class="secondary" id="close-drawer">關閉</button>
     </div>
 
@@ -290,7 +298,7 @@ async function openCustomer(id, compose = null) {
       <label>性別<select name="gender">${['', '女', '男', '其他'].map((g) => `<option value="${g}" ${g === (c.gender || '') ? 'selected' : ''}>${g || '—'}</option>`).join('')}</select></label>
       ${field('tags', '標籤（逗號分隔，如 VIP,團購）')}${field('reorder_days', '回訪週期（天，空白自動推算）', 'number')}${field('next_contact_date', '下次聯絡日', 'date')}
       ${field('address', '地址', 'text', true)}${field('note', '備註（喜好、注意事項…）', 'textarea', true)}
-      <div class="row wide" style="grid-column:1/-1"><button type="submit">儲存資料</button><span class="spacer"></span><button type="button" class="danger small" id="delete-customer">刪除客戶</button></div>
+      <div class="row wide" style="grid-column:1/-1"><button type="submit">儲存資料</button><span class="spacer"></span><button type="button" class="danger small admin-only" id="delete-customer">刪除客戶</button></div>
     </form>
 
     <h3>訂單紀錄（${orders.length} 筆）</h3>
@@ -341,10 +349,13 @@ async function openCustomer(id, compose = null) {
     </details>
 
     <h3>對話紀錄</h3>
-    <div class="chat" id="chat">${messages.map((m) => `<div class="bubble ${m.direction}">${esc(m.text)}<time>${fmtTime(m.created_at)}</time></div>`).join('') || '<div class="muted">尚無訊息</div>'}</div>
+    <div class="chat" id="chat">${messages.map((m) => `<div class="bubble ${m.direction}">${esc(m.text)}<time>${fmtTime(m.created_at)}${m.staff_name ? `・${esc(m.staff_name)}` : ''}</time></div>`).join('') || '<div class="muted">尚無訊息</div>'}</div>
 
     <h3>提醒紀錄</h3>
-    <div class="muted">${reminders.map((r) => `${fmtTime(r.sent_at)} ${KIND_LABEL[r.kind] || r.kind}${r.auto ? '（自動）' : ''}${r.ok ? '' : ` ❌ ${esc(r.error)}`}`).join('<br>') || '尚無'}</div>
+    <div class="muted">${reminders.map((r) => `${fmtTime(r.sent_at)} ${KIND_LABEL[r.kind] || r.kind}${r.auto ? '（自動）' : ''}${r.staff_name && !r.auto ? `・${esc(r.staff_name)}` : ''}${r.ok ? '' : ` ❌ ${esc(r.error)}`}`).join('<br>') || '尚無'}</div>
+
+    <h3>操作紀錄</h3>
+    <div class="muted">${activity.map((a) => `${fmtTime(a.at)}｜${esc(a.user_name || '系統')}｜${esc(a.action)}${a.detail ? `：${esc(a.detail)}` : ''}`).join('<br>') || '尚無'}</div>
   `;
   const dlg = $('#drawer');
   if (!dlg.open) dlg.showModal();
@@ -366,7 +377,7 @@ async function openCustomer(id, compose = null) {
   };
   if ($('#toggle-staff')) $('#toggle-staff').onclick = () => guard(async () => {
     await api(`/api/customers/${id}/staff`, { method: 'POST', body: { staff: !c.is_staff } });
-    toast(c.is_staff ? '已取消客服' : '已設為客服，每天會收到關懷清單');
+    toast(c.is_staff ? '已取消' : '已設為清單接收人，每天會收到關懷清單');
     loadStatus();
     openCustomer(id);
   });
@@ -449,8 +460,8 @@ async function loadBrands() {
       <div class="muted">Channel secret：${b.has_secret ? '<span class="ok">已設定</span>' : '<span class="warn">未設定</span>'}｜Access token：${b.has_token ? `<span class="ok">已設定 ${esc(b.token_hint)}</span>` : '<span class="warn">未設定</span>'}${b.bank_info ? `｜匯款資訊：${esc(b.bank_info)}` : ''}</div>
     </div>
     <div class="actions">
-      <button class="small secondary" data-edit-brand="${b.id}">編輯</button>
-      <button class="small secondary" data-sync-brand="${b.id}" title="僅限認證 / 進階帳號">同步好友</button>
+      <button class="small secondary admin-only" data-edit-brand="${b.id}">編輯</button>
+      <button class="small secondary admin-only" data-sync-brand="${b.id}" title="僅限認證 / 進階帳號">同步好友</button>
     </div>
     <form class="grid" data-brand-form="${b.id}" hidden>
       ${brandFields(b)}
@@ -658,5 +669,65 @@ document.addEventListener('click', (e) => {
   if (t.dataset.open) return guard(() => openCustomer(Number(t.dataset.open)));
 });
 
-const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, brands: loadBrands, search: loadSearch };
+// ---------- 帳號管理 ----------
+async function loadAccounts() {
+  const [users, activity] = await Promise.all([api('/api/users'), api(`/api/activity?${new URLSearchParams({ user: $('#activity-user').value })}`)]);
+  $('#user-table').innerHTML = `<thead><tr><th>名稱</th><th>帳號</th><th>角色</th><th>狀態</th><th>最後登入</th><th></th></tr></thead><tbody>
+    <tr><td>管理員</td><td><code>admin</code></td><td>管理員</td><td>啟用</td><td></td><td class="muted">密碼＝ADMIN_PASSWORD</td></tr>
+    ${users.map((u) => `<tr>
+      <td>${esc(u.display_name)}</td><td><code>${esc(u.username)}</code></td>
+      <td><select data-user-role="${u.id}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === u.role ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
+      <td>${u.active ? '啟用' : '<span class="warn">停用</span>'}</td><td class="muted">${fmtTime(u.last_login_at)}</td>
+      <td><button class="small secondary" data-user-reset="${u.id}">重設密碼</button> <button class="small secondary" data-user-active="${u.id}" data-active="${u.active ? 0 : 1}">${u.active ? '停用' : '啟用'}</button></td>
+    </tr>`).join('')}</tbody>`;
+  const names = ['管理員', ...users.map((u) => u.display_name)];
+  const sel = $('#activity-user');
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">全部人員</option>${names.map((n) => `<option ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('')}`;
+  $('#activity-table').innerHTML = `<thead><tr><th>時間</th><th>人員</th><th>動作</th><th>內容</th></tr></thead><tbody>${activity.map((a) => `<tr ${a.customer_id ? `class="clickable" data-open="${a.customer_id}"` : ''}>
+    <td>${fmtTime(a.at)}</td><td>${esc(a.user_name || '系統')}</td><td>${esc(a.action)}</td><td class="muted">${esc(a.detail || '')}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">尚無紀錄</td></tr>'}</tbody>`;
+  document.querySelectorAll('[data-user-role]').forEach((s) => s.onchange = () => guard(async () => { await api(`/api/users/${s.dataset.userRole}`, { method: 'PATCH', body: { role: s.value } }); toast('已更新'); loadAccounts(); }));
+  document.querySelectorAll('[data-user-active]').forEach((b) => b.onclick = () => guard(async () => { await api(`/api/users/${b.dataset.userActive}`, { method: 'PATCH', body: { active: b.dataset.active === '1' } }); loadAccounts(); }));
+  document.querySelectorAll('[data-user-reset]').forEach((b) => b.onclick = () => guard(async () => {
+    const pw = prompt('輸入新密碼（至少 8 個字）');
+    if (!pw) return;
+    await api(`/api/users/${b.dataset.userReset}`, { method: 'PATCH', body: { password: pw } });
+    toast('已重設，對方需要用新密碼重新登入');
+  }));
+}
+$('#activity-user').addEventListener('change', () => guard(loadAccounts));
+$('#new-user').addEventListener('click', () => {
+  const dlg = $('#drawer');
+  $('#drawer-body').innerHTML = `<div class="row"><h2>新增帳號</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
+    <form id="user-new" class="grid" style="margin-top:12px">
+      <label>顯示名稱（會記錄在訊息與操作紀錄）<input name="display_name" required></label>
+      <label>登入帳號（英數字）<input name="username" required pattern="[a-zA-Z0-9._\\-]{2,30}" autocomplete="off"></label>
+      <label>密碼（至少 8 個字）<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+      <label>角色<select name="role">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === 'staff' ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <div class="row" style="grid-column:1/-1"><button type="submit">建立</button></div>
+    </form>`;
+  dlg.showModal();
+  $('#close-drawer').onclick = () => dlg.close();
+  $('#user-new').onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    await api('/api/users', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+    toast('已建立帳號');
+    dlg.close();
+  }); };
+});
+$('#logout').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.href = '/login';
+});
+$('#change-password').addEventListener('click', () => guard(async () => {
+  const current = prompt('目前的密碼');
+  if (!current) return;
+  const password = prompt('新密碼（至少 8 個字）');
+  if (!password) return;
+  if (prompt('再輸入一次新密碼') !== password) throw new Error('兩次輸入的新密碼不一樣');
+  await api('/api/me/password', { method: 'POST', body: { current, password } });
+  alert('密碼已修改，請用新密碼重新登入');
+  location.href = '/login';
+}));
+
+const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, brands: loadBrands, accounts: loadAccounts, search: loadSearch };
 guard(async () => { await loadStatus(); await loadFocus(); });

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登入｜LINE 客戶管理</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="login-page">
+    <form id="login" class="card">
+      <h1>LINE 客戶管理</h1>
+      <label>帳號<input name="username" autocomplete="username" required autofocus></label>
+      <label>密碼<input name="password" type="password" autocomplete="current-password" required></label>
+      <p id="err" class="warn" hidden></p>
+      <button type="submit">登入</button>
+      <p class="muted">忘記密碼請找管理員重設。</p>
+    </form>
+  </main>
+  <script>
+    document.getElementById('login').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const err = document.getElementById('err');
+      err.hidden = true;
+      f.querySelector('button').disabled = true;
+      try {
+        const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: f.username.value, password: f.password.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '登入失敗');
+        location.href = '/';
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.hidden = false;
+        f.querySelector('button').disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -16,6 +16,7 @@
       <button data-tab="customers">客戶</button>
       <button data-tab="orders">訂單</button>
       <button data-tab="brands">品牌</button>
+      <button data-tab="accounts" class="admin-only">帳號</button>
     </nav>
     <form id="search-form" class="search-bar" role="search">
       <input id="search-q" type="search" placeholder="搜尋客戶、電話、航班、地點、對話、#訂單號…" aria-label="搜尋">
@@ -24,6 +25,7 @@
       <input id="search-to" type="date" title="用車日（到）" aria-label="到">
       <button type="submit">搜尋</button>
     </form>
+    <div class="row who"><span id="me" class="muted"></span><button id="change-password" class="small secondary">修改密碼</button><button id="logout" class="small secondary">登出</button></div>
     <div id="status" class="muted"></div>
   </header>
 
@@ -60,7 +62,7 @@
         <span class="spacer"></span>
         <a class="button secondary" id="export-customers" href="/api/export/customers.csv">匯出 CSV</a>
         <button id="find-duplicates" class="secondary">找重複客戶</button>
-        <button id="import-data" class="secondary">匯入舊資料</button>
+        <button id="import-data" class="secondary admin-only">匯入舊資料</button>
         <button id="new-customer">新增客戶</button>
       </div>
       <div class="table-wrap"><table id="customer-table"></table></div>
@@ -75,6 +77,15 @@
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
     </section>
+    <section id="tab-accounts" hidden>
+      <div class="toolbar"><h2>帳號管理</h2><span class="spacer"></span><button id="new-user">新增帳號</button></div>
+      <p class="muted">每位客服用自己的帳號登入，系統會記錄誰傳了訊息、誰改了訂單。「管理員」可以管理品牌、帳號、匯入與備份；「客服」只能處理客戶與訂單。老闆帳號 <code>admin</code> 的密碼是 Render 上的 ADMIN_PASSWORD。</p>
+      <div class="table-wrap"><table id="user-table"></table></div>
+      <h3>操作紀錄</h3>
+      <div class="toolbar"><select id="activity-user"><option value="">全部人員</option></select></div>
+      <div class="table-wrap"><table id="activity-table"></table></div>
+    </section>
+
     <section id="tab-search" hidden>
       <div class="toolbar"><h2 id="search-title">搜尋結果</h2><span class="spacer"></span><button id="search-clear" class="secondary">清除搜尋</button></div>
       <div id="search-results"></div>
@@ -83,13 +94,13 @@
       <div class="toolbar">
         <h2>品牌與 LINE 官方帳號</h2>
         <span class="spacer"></span>
-        <a class="button secondary" href="/api/export/backup.db" title="下載完整資料庫備份（含所有品牌、客戶、訂單、對話）">下載備份</a>
-        <button id="new-brand">新增品牌</button>
+        <a class="button secondary admin-only" href="/api/export/backup.db" title="下載完整資料庫備份（含所有品牌、客戶、訂單、對話）">下載備份</a>
+        <button id="new-brand" class="admin-only">新增品牌</button>
       </div>
       <p class="muted">每個品牌對應一個 LINE 官方帳號。到 LINE Developers 該帳號的 Messaging API 設定頁，把 Webhook URL 設成下方顯示的網址。</p>
       <div id="brand-list"></div>
       <h3>每日清單通知對象（客服）</h3>
-      <p class="muted">客服用自己的 LINE 加任一品牌官方帳號好友並傳一則訊息，再到「客戶」找到這位客服、點「設為客服」。每天的清單（含所有品牌）會由該品牌的帳號推播給對方。</p>
+      <p class="muted">客服用自己的 LINE 加任一品牌官方帳號好友並傳一則訊息，再到「客戶」找到這位客服、點「設為清單接收人」。每天的清單（含所有品牌）會由該品牌的帳號推播給對方。</p>
       <div id="staff-list" class="card"></div>
     </section>
   </main>
