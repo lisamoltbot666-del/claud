@@ -85,7 +85,7 @@ export function buildRepurchaseList(store, config, { filter = 'all', brandId = n
     byCustomer.get(o.customer_id).push(o);
   }
   const rows = [];
-  const staff = new Set(store.staffIds());
+  const staff = store.internalIds();
   const customers = brandId ? store.all('SELECT * FROM customers WHERE brand_id = ?', brandId) : store.all('SELECT * FROM customers');
   for (const c of customers) {
     if (staff.has(c.id)) continue;

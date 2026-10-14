@@ -63,7 +63,7 @@ let currentTab = 'focus';
 function showTab(tab) {
   currentTab = tab;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'templates', 'brands', 'accounts', 'search']) $(`#tab-${t}`).hidden = t !== tab;
+  for (const t of ['focus', 'repurchase', 'customers', 'orders', 'dispatch', 'templates', 'brands', 'accounts', 'search']) $(`#tab-${t}`).hidden = t !== tab;
   guard(LOADERS[tab]);
 }
 
@@ -113,7 +113,7 @@ async function loadFocus() {
       </div>
       <div class="actions">
         ${verifyOrder ? `<button class="small" data-paid="${verifyOrder}">確認已入帳</button>` : ''}
-        ${dispatchOrder ? `<button class="small" data-dispatch="${dispatchOrder}">標記已派車</button>` : ''}
+        ${dispatchOrder ? `<button class="small" data-dispatch="${dispatchOrder}">派車</button>` : ''}
         ${tripOrder && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="trip" data-order="${tripOrder}">發送行程確認</button>` : ''}
         ${actions.has('payment') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="payment" data-order="${payOrder}">發送匯款提醒</button>` : ''}
         ${actions.has('reorder') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="reorder">發送回訪邀請</button>` : ''}
@@ -218,7 +218,7 @@ async function loadCustomers() {
   $('#customer-table').innerHTML = `<thead><tr><th></th><th>名稱</th><th>電話</th><th>標籤</th><th>訂單數</th><th>累積消費</th><th>最後下單</th><th>最後訊息</th><th>好友</th></tr></thead>
   <tbody>${rows.length ? rows.map((c) => `<tr class="clickable" data-open="${c.id}">
     <td>${c.picture_url ? `<img class="avatar" style="width:28px;height:28px" src="${esc(c.picture_url)}" alt="">` : ''}</td>
-    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">清單接收人</span>' : ''}${c.real_name && c.display_name && c.real_name !== c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
+    <td>${brandTag(c.brand_id)}${esc(nameOf(c))}${c.is_staff ? ' <span class="badge">清單接收人</span>' : ''}${c.is_driver ? ' <span class="badge">司機</span>' : ''}${c.real_name && c.display_name && c.real_name !== c.display_name ? `<div class="muted">${esc(c.display_name)}</div>` : ''}</td>
     <td>${esc(c.phone)}</td><td>${esc(c.tags)}</td><td>${c.order_count}</td><td>${money(c.total_spent)}</td>
     <td>${esc(c.last_order_date || '')}</td><td>${fmtTime(c.last_inbound_at)}</td><td>${c.is_friend ? '✅' : '—'}</td>
   </tr>`).join('') : '<tr><td colspan="9" class="empty">尚無客戶。客戶加入官方帳號好友或傳訊息後會自動出現在這裡。</td></tr>'}</tbody>`;
@@ -245,12 +245,12 @@ async function loadOrders() {
     rows = rows.filter((o) => o.service_date && o.service_date >= TODAY && o.service_date <= last && !['completed', 'cancelled'].includes(o.status))
       .sort((a, b) => tripWhen(a).localeCompare(tripWhen(b)));
   }
-  $('#order-table').innerHTML = `<thead><tr><th>#</th><th>用車</th><th>客戶</th><th>服務</th><th>行程</th><th>金額</th><th>狀態</th><th>匯款期限</th><th>匯款回報</th></tr></thead>
+  $('#order-table').innerHTML = `<thead><tr><th>#</th><th>用車</th><th>客戶</th><th>服務</th><th>行程</th><th>司機</th><th>金額</th><th>狀態</th><th>匯款期限</th><th>匯款回報</th></tr></thead>
   <tbody>${rows.length ? rows.map((o) => `<tr class="clickable" data-open="${o.customer_id}">
     <td>${o.id}</td><td>${esc(tripWhen(o)) || `<span class="muted">下單 ${esc(o.order_date)}</span>`}</td><td>${brandTag(o.brand_id)}${esc(o.real_name || o.display_name)}</td>
-    <td>${esc(SERVICES[o.service_type] || '')}<div class="muted">${esc(o.items)}</div></td><td class="muted">${tripRoute(o)}</td><td>${money(o.amount)}</td>
+    <td>${esc(SERVICES[o.service_type] || '')}<div class="muted">${esc(o.items)}</div></td><td class="muted">${tripRoute(o)}</td><td>${esc(o.driver_name || '')}</td><td>${money(o.amount)}</td>
     <td>${esc(STATUSES[o.status])}</td><td>${o.status === 'pending_payment' ? esc(o.payment_due_date || '') : ''}</td><td>${esc(o.payment_report || '')}</td>
-  </tr>`).join('') : '<tr><td colspan="9" class="empty">沒有訂單</td></tr>'}</tbody>`;
+  </tr>`).join('') : '<tr><td colspan="10" class="empty">沒有訂單</td></tr>'}</tbody>`;
 }
 $('#order-status').addEventListener('change', () => guard(loadOrders));
 $('#order-when').addEventListener('change', () => guard(loadOrders));
@@ -306,10 +306,10 @@ async function openCustomer(id, compose = null) {
       <thead><tr><th>#</th><th>用車</th><th>服務 / 行程</th><th>金額</th><th>狀態</th><th>匯款期限 / 回報</th><th></th></tr></thead>
       <tbody>${orders.map((o) => `<tr>
         <td>${o.id}</td><td>${esc(tripWhen(o)) || '—'}<div class="muted">下單 ${esc(o.order_date)}</div></td>
-        <td>${esc([SERVICES[o.service_type], o.items].filter(Boolean).join(' '))}<div class="muted">${tripRoute(o)}</div></td><td>${money(o.amount)}</td>
+        <td>${esc([SERVICES[o.service_type], o.items].filter(Boolean).join(' '))}<div class="muted">${tripRoute(o)}</div>${o.driver_name ? `<div>🚘 ${esc(o.driver_name)}${o.driver_plate ? ` ${esc(o.driver_plate)}` : ''}</div>` : ''}</td><td>${money(o.amount)}</td>
         <td><select data-order-status="${o.id}">${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}" ${k === o.status ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
         <td>${o.status === 'pending_payment' ? `${esc(o.payment_due_date || '')}${o.payment_report ? `<div class="muted">回報：${esc(o.payment_report)}</div>` : ''}` : `<span class="muted">${o.paid_at ? `入帳 ${fmtTime(o.paid_at)}` : ''}</span>`}</td>
-        <td>${o.status === 'pending_payment' ? `<button class="small" data-paid="${o.id}">確認入帳</button>` : ''} <button class="small secondary" data-edit-order="${o.id}">編輯</button> <button class="small secondary" data-del-order="${o.id}">刪除</button></td>
+        <td>${o.status === 'pending_payment' ? `<button class="small" data-paid="${o.id}">確認入帳</button>` : ''} ${['cancelled', 'completed'].includes(o.status) ? '' : `<button class="small secondary" data-dispatch="${o.id}">派車</button> `}<button class="small secondary" data-edit-order="${o.id}">編輯</button> <button class="small secondary" data-del-order="${o.id}">刪除</button></td>
       </tr>`).join('') || '<tr><td colspan="7" class="empty">尚無訂單</td></tr>'}</tbody>
     </table></div>
     <form id="order-form" class="grid order-form" style="margin-top:8px">
@@ -670,10 +670,7 @@ function refreshCurrentTab() {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-open],[data-compose],[data-handled],[data-postpone],[data-paid],[data-dispatch]');
   if (!t) return;
-  if (t.dataset.dispatch) return guard(async () => {
-    await api(`/api/orders/${t.dataset.dispatch}`, { method: 'PATCH', body: { status: 'shipped' } });
-    toast('已標記派車'); refreshCurrentTab();
-  });
+  if (t.dataset.dispatch) return guard(() => openDispatch(Number(t.dataset.dispatch)));
   if (t.dataset.paid) return guard(async () => { await markPaid(t.dataset.paid); currentCustomerId ? openCustomer(currentCustomerId) : refreshCurrentTab(); });
   if (t.dataset.compose) return guard(() => openCustomer(Number(t.dataset.compose), { kind: t.dataset.kind, orderId: t.dataset.order }));
   if (t.dataset.handled) return guard(async () => { await api(`/api/customers/${t.dataset.handled}/handled`, { method: 'POST' }); loadFocus(); });
@@ -684,6 +681,130 @@ document.addEventListener('click', (e) => {
   });
   if (t.dataset.open) return guard(() => openCustomer(Number(t.dataset.open)));
 });
+
+// ---------- 司機與派車 ----------
+let dispatchRange = 0;
+const addDaysStr = (d, n) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+document.querySelectorAll('#dispatch-range button').forEach((b) => b.addEventListener('click', () => {
+  dispatchRange = Number(b.dataset.range);
+  $('#dispatch-date').value = '';
+  document.querySelectorAll('#dispatch-range button').forEach((x) => x.classList.toggle('active', x === b));
+  guard(loadDispatch);
+}));
+$('#dispatch-date').addEventListener('change', () => { document.querySelectorAll('#dispatch-range button').forEach((x) => x.classList.remove('active')); guard(loadDispatch); });
+
+async function loadDispatch() {
+  const pick = $('#dispatch-date').value;
+  const from = pick || (dispatchRange === 1 ? addDaysStr(TODAY, 1) : TODAY);
+  const to = pick || (dispatchRange === 7 ? addDaysStr(TODAY, 7) : from);
+  const [board, drivers] = await Promise.all([api(`/api/dispatch?${new URLSearchParams({ from, to, ...(currentBrand ? { brand: currentBrand } : {}) })}`), api('/api/drivers')]);
+  const unassigned = board.orders.filter((o) => !o.driver_id).length;
+  $('#dispatch-summary').textContent = board.orders.length ? `${board.orders.length} 趟，${unassigned ? `${unassigned} 趟還沒派司機` : '全部已派司機 ✅'}` : '';
+  const byDate = Map.groupBy ? Map.groupBy(board.orders, (o) => o.service_date) : board.orders.reduce((m, o) => m.set(o.service_date, [...(m.get(o.service_date) || []), o]), new Map());
+  const driverOptions = (sel) => `<option value="">— 未指派 —</option>${board.drivers.map((d) => `<option value="${d.id}" ${d.id === sel ? 'selected' : ''}>${esc(d.name)}${d.plate ? ` ${esc(d.plate)}` : ''}</option>`).join('')}`;
+  $('#dispatch-board').innerHTML = [...byDate].map(([date, list]) => `<h3>${esc(date)}（${list.length} 趟）</h3>
+    <div class="table-wrap"><table><thead><tr><th>時間</th><th>客戶</th><th>服務</th><th>行程</th><th>付款</th><th>司機</th><th></th></tr></thead><tbody>
+    ${list.map((o) => `<tr>
+      <td><strong>${esc(o.service_time || '—')}</strong></td>
+      <td>${brandTag(o.brand_id)}<span class="name" data-open="${o.customer_id}">${esc(o.real_name || o.display_name)}</span><div class="muted">${esc(o.phone || '')}</div></td>
+      <td>${esc(SERVICES[o.service_type] || '')}<div class="muted">${esc(o.items || '')}</div></td>
+      <td class="muted">${tripRoute(o)}</td>
+      <td>${o.status === 'pending_payment' ? `<span class="warn">待付款 ${money(o.amount)}</span>` : esc(STATUSES[o.status])}</td>
+      <td><select data-assign="${o.id}" ${['completed'].includes(o.status) ? 'disabled' : ''}>${driverOptions(o.driver_id)}</select>${o.dispatched_at ? `<div class="muted">已傳派車單 ${fmtTime(o.dispatched_at)}</div>` : ''}</td>
+      <td><button class="small secondary" data-dispatch="${o.id}">派車單</button></td>
+    </tr>`).join('')}</tbody></table></div>`).join('') || '<div class="card empty">這段期間沒有行程</div>';
+  document.querySelectorAll('[data-assign]').forEach((s) => s.onchange = () => guard(async () => {
+    await api(`/api/orders/${s.dataset.assign}/driver`, { method: 'POST', body: { driver_id: s.value || null } });
+    toast(s.value ? '已指派司機' : '已取消指派');
+    loadDispatch();
+  }));
+  $('#driver-table').innerHTML = `<thead><tr><th>司機</th><th>電話</th><th>車號 / 車型</th><th>LINE</th><th>備註</th><th>狀態</th><th></th></tr></thead><tbody>
+    ${drivers.map((d) => `<tr><td>${esc(d.name)}</td><td>${esc(d.phone || '')}</td><td>${esc(d.plate || '')}<div class="muted">${esc(d.car_model || '')}</div></td>
+      <td>${d.line_customer_id ? `${brandTag(d.line_brand_id)}${esc(d.line_name || '')}` : '<span class="muted">未連結</span>'}</td>
+      <td class="muted">${esc(d.note || '')}</td><td>${d.active ? '在職' : '<span class="muted">停用</span>'}</td>
+      <td><button class="small secondary" data-driver-edit="${d.id}">編輯</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">還沒有司機，按「新增司機」</td></tr>'}</tbody>`;
+  document.querySelectorAll('[data-driver-edit]').forEach((b) => b.onclick = () => editDriver(drivers.find((d) => d.id === Number(b.dataset.driverEdit))));
+}
+
+function editDriver(d = {}) {
+  const dlg = $('#drawer');
+  const f = (k, label, extra = '') => `<label>${label}<input name="${k}" value="${esc(d[k] ?? '')}" ${extra}></label>`;
+  $('#drawer-body').innerHTML = `<div class="row"><h2>${d.id ? '編輯司機' : '新增司機'}</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
+    <form id="driver-form" class="grid" style="margin-top:12px">
+      ${f('name', '姓名', 'required')}${f('phone', '電話', 'type="tel"')}${f('plate', '車號')}${f('car_model', '車型（例如 Toyota Alphard 7 人座）')}
+      <label class="wide">備註<input name="note" value="${esc(d.note || '')}"></label>
+      <label>狀態<select name="active"><option value="1" ${d.active !== 0 ? 'selected' : ''}>在職</option><option value="0" ${d.active === 0 ? 'selected' : ''}>停用</option></select></label>
+      <input type="hidden" name="line_customer_id" value="${d.line_customer_id ?? ''}">
+      <div class="wide" style="grid-column:1/-1">
+        <div class="muted">連結 LINE（用來直接傳派車單）：<span id="driver-line">${d.line_customer_id ? `${esc(d.line_name || '')} <button type="button" class="small secondary" id="driver-unlink">取消連結</button>` : '未連結'}</span></div>
+        <input id="driver-line-search" type="search" placeholder="搜尋司機的 LINE 名稱（司機需先加官方帳號好友並傳訊息）" style="margin-top:4px">
+        <div id="driver-line-results"></div>
+      </div>
+      <div class="row" style="grid-column:1/-1"><button type="submit">儲存</button></div>
+    </form>`;
+  if (!dlg.open) dlg.showModal();
+  $('#close-drawer').onclick = () => dlg.close();
+  const form = $('#driver-form');
+  const unlink = () => { form.line_customer_id.value = ''; $('#driver-line').textContent = '未連結（儲存後生效）'; };
+  if ($('#driver-unlink')) $('#driver-unlink').onclick = unlink;
+  let timer;
+  $('#driver-line-search').oninput = (e) => { clearTimeout(timer); timer = setTimeout(() => guard(async () => {
+    const q = e.target.value.trim();
+    if (q.length < 1) { $('#driver-line-results').innerHTML = ''; return; }
+    const r = await api(`/api/search?${new URLSearchParams({ q })}`);
+    const friends = r.customers.filter((c) => c.line_user_id).slice(0, 8);
+    $('#driver-line-results').innerHTML = friends.map((c) => `<div class="row" style="margin-top:4px">${brandTag(c.brand_id)}${esc(nameOf(c))}<span class="spacer"></span><button type="button" class="small secondary" data-link="${c.id}" data-name="${esc(nameOf(c))}">連結</button></div>`).join('') || '<span class="muted">找不到 LINE 好友</span>';
+    document.querySelectorAll('[data-link]').forEach((b) => b.onclick = () => { form.line_customer_id.value = b.dataset.link; $('#driver-line').textContent = `${b.dataset.name}（儲存後生效）`; $('#driver-line-results').innerHTML = ''; });
+  }), 250); };
+  form.onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    const body = Object.fromEntries(new FormData(form));
+    await api(d.id ? `/api/drivers/${d.id}` : '/api/drivers', { method: d.id ? 'PATCH' : 'POST', body });
+    toast('已儲存');
+    dlg.close();
+  }); };
+}
+$('#new-driver').addEventListener('click', () => editDriver());
+
+async function openDispatch(orderId) {
+  const r = await api(`/api/orders/${orderId}/dispatch`);
+  const o = r.order;
+  const returnTo = currentCustomerId;
+  const dlg = $('#drawer');
+  $('#drawer-body').innerHTML = `<div class="row"><h2>派車 #${o.id}</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
+    <div class="row" style="margin:10px 0"><label>司機 <select id="dispatch-driver"><option value="">— 未指派 —</option>${r.drivers.map((d) => `<option value="${d.id}" ${d.id === o.driver_id ? 'selected' : ''}>${esc(d.name)}${d.plate ? ` ${esc(d.plate)}` : ''}</option>`).join('')}</select></label>
+      ${r.drivers.length ? '' : '<span class="muted">還沒有司機，請到「派車」頁新增</span>'}</div>
+    <h3>派車單（給司機）</h3>
+    <textarea id="dispatch-text" style="min-height:200px">${esc(r.text)}</textarea>
+    <div class="row" style="margin-top:6px">
+      <button type="button" class="secondary" id="copy-dispatch">複製</button>
+      <button type="button" id="send-driver" ${r.canPushDriver ? '' : 'disabled title="司機還沒連結 LINE"'}>LINE 傳給司機</button>
+      ${o.dispatched_at ? `<span class="muted">上次傳送 ${fmtTime(o.dispatched_at)}</span>` : ''}
+    </div>
+    <h3>司機資訊（給客人）</h3>
+    <textarea id="customer-text" style="min-height:140px" ${r.driver ? '' : 'disabled'}>${esc(r.customerText || '指派司機後會產生')}</textarea>
+    <div class="row" style="margin-top:6px"><button type="button" id="send-customer" ${r.driver ? '' : 'disabled'}>LINE 傳給客人</button><span class="muted">會使用官方帳號訊息額度</span></div>
+    ${returnTo ? '<div class="row" style="margin-top:12px"><button type="button" class="secondary" id="back-customer">← 回客戶資料</button></div>' : ''}`;
+  if (!dlg.open) dlg.showModal();
+  $('#close-drawer').onclick = () => dlg.close();
+  if ($('#back-customer')) $('#back-customer').onclick = () => guard(() => openCustomer(returnTo));
+  $('#dispatch-driver').onchange = (e) => guard(async () => {
+    await api(`/api/orders/${o.id}/driver`, { method: 'POST', body: { driver_id: e.target.value || null } });
+    toast(e.target.value ? '已指派司機' : '已取消指派');
+    currentCustomerId = returnTo;
+    openDispatch(o.id);
+  });
+  $('#copy-dispatch').onclick = () => guard(async () => { await navigator.clipboard.writeText($('#dispatch-text').value); toast('已複製，可貼到 LINE 群組'); });
+  $('#send-driver').onclick = () => guard(async () => {
+    await api(`/api/orders/${o.id}/dispatch/driver`, { method: 'POST', body: { text: $('#dispatch-text').value } });
+    toast('已傳給司機'); currentCustomerId = returnTo; openDispatch(o.id);
+  });
+  $('#send-customer').onclick = () => guard(async () => {
+    if (!confirm('把司機資訊用 LINE 傳給客人？')) return;
+    await api(`/api/orders/${o.id}/dispatch/customer`, { method: 'POST', body: { text: $('#customer-text').value } });
+    toast('已傳給客人');
+  });
+  currentCustomerId = returnTo;
+}
 
 // ---------- 常用回覆範本 ----------
 let TEMPLATE_VARS = {};
@@ -796,5 +917,5 @@ $('#change-password').addEventListener('click', () => guard(async () => {
   location.href = '/login';
 }));
 
-const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, templates: loadTemplates, brands: loadBrands, accounts: loadAccounts, search: loadSearch };
+const LOADERS = { focus: loadFocus, repurchase: loadRepurchase, customers: loadCustomers, orders: loadOrders, dispatch: loadDispatch, templates: loadTemplates, brands: loadBrands, accounts: loadAccounts, search: loadSearch };
 guard(async () => { await loadStatus(); await loadFocus(); });

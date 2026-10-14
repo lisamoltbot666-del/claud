@@ -15,6 +15,7 @@
       <button data-tab="repurchase">回訪</button>
       <button data-tab="customers">客戶</button>
       <button data-tab="orders">訂單</button>
+      <button data-tab="dispatch">派車</button>
       <button data-tab="templates">範本</button>
       <button data-tab="brands">品牌</button>
       <button data-tab="accounts" class="admin-only">帳號</button>
@@ -78,6 +79,24 @@
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
     </section>
+    <section id="tab-dispatch" hidden>
+      <div class="toolbar">
+        <h2>派車表</h2>
+        <div class="seg" id="dispatch-range">
+          <button data-range="0" class="active">今天</button>
+          <button data-range="1">明天</button>
+          <button data-range="7">7 天內</button>
+        </div>
+        <input id="dispatch-date" type="date" title="指定日期">
+        <span class="spacer"></span>
+        <span class="muted" id="dispatch-summary"></span>
+      </div>
+      <div id="dispatch-board"></div>
+      <h3>司機名單</h3>
+      <div class="toolbar"><span class="muted">司機在各品牌共用。連結司機的 LINE（司機先加任一品牌官方帳號好友並傳一則訊息）後，派車單可以直接用 LINE 傳給司機。</span><span class="spacer"></span><button id="new-driver">新增司機</button></div>
+      <div class="table-wrap"><table id="driver-table"></table></div>
+    </section>
+
     <section id="tab-templates" hidden>
       <div class="toolbar"><h2>常用回覆範本</h2><span class="spacer"></span><button id="new-template">新增範本</button></div>
       <p class="muted">在客戶資料的「發送 LINE 訊息」可以一鍵套用。內容裡的 <code>{姓名}</code>、<code>{用車日}</code> 等欄位會自動換成這位客戶和他最近一筆行程的資料；左上角選了品牌時，只顯示該品牌與共用的範本。</p>
