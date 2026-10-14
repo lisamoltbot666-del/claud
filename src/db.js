@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS brands (
   channel_secret TEXT,
   channel_access_token TEXT,
   bank_info TEXT,
+  forward_url TEXT,              -- 同時轉送 Webhook 給原本使用的系統（可留空）
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 `;
@@ -103,7 +104,7 @@ export const ORDER_STATUSES = {
 };
 
 const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
-const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info'];
+const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info', 'forward_url'];
 const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note'];
 
 const nowIso = () => new Date().toISOString();
@@ -114,6 +115,7 @@ export function openDb(dbPath) {
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(BRANDS_TABLE);
+  if (!db.prepare('PRAGMA table_info(brands)').all().some((r) => r.name === 'forward_url')) db.exec('ALTER TABLE brands ADD COLUMN forward_url TEXT');
   migrateLegacyCustomers(db);
   db.exec(customersTable('customers'));
   db.exec(SCHEMA);
@@ -193,6 +195,16 @@ export class Store {
     }
     if ('name' in fields && !String(fields.name).trim()) throw new Error('請輸入品牌名稱');
     if (fields.color && !/^#[0-9a-f]{6}$/i.test(fields.color)) throw new Error('顏色格式需為 #RRGGBB');
+    if (fields.forward_url) {
+      fields = { ...fields, forward_url: String(fields.forward_url).trim() };
+      let u;
+      try {
+        u = new URL(fields.forward_url);
+      } catch {
+        throw new Error('轉送網址格式不正確');
+      }
+      if (!['https:', 'http:'].includes(u.protocol)) throw new Error('轉送網址需以 https:// 開頭');
+    }
     const keys = BRAND_EDITABLE.filter((k) => k in fields);
     if (keys.length) this.run(`UPDATE brands SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => (fields[k] === '' ? null : fields[k])), id);
     return this.getBrand(id);

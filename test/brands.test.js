@@ -177,3 +177,71 @@ test('INITIAL_BRANDS：自動建立品牌，只建立一次，刪除或改名後
   assert.equal(ensureInitialBrands(store, cfg, silent).length, 0);
   assert.deepEqual(store.listBrands().map((b) => b.name), ['享運旗艦', '壞']);
 });
+
+test('轉送：已驗證的 Webhook 原封不動轉給舊系統；舊系統掛掉也不影響本系統', async (t) => {
+  // 模擬舊系統（例如 Cloudflare Worker）：記錄收到的內容與簽章
+  const received = [];
+  const old = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => { received.push({ path: req.url, body: Buffer.concat(chunks), sig: req.headers['x-line-signature'], fwd: req.headers['x-crm-forwarded'] }); res.end('ok'); });
+  });
+  await new Promise((r) => old.listen(0, r));
+  t.after(() => old.close());
+
+  const { store, a, b } = twoBrands();
+  const lines = fakeLines();
+  const server = http.createServer(createApp({ store, lines, config, logger: silent }));
+  await new Promise((r) => server.listen(0, r));
+  t.after(() => server.close());
+  const base = `http://localhost:${server.address().port}`;
+  const auth = { Authorization: `Basic ${Buffer.from('admin:pw').toString('base64')}`, 'Content-Type': 'application/json' };
+  const patch = (id, body) => fetch(`${base}/api/brands/${id}`, { method: 'PATCH', headers: auth, body: JSON.stringify(body) });
+
+  // 設定驗證
+  assert.equal((await patch(a.id, { forward_url: 'ftp://x' })).status, 400);
+  assert.equal((await patch(a.id, { forward_url: `${base}/webhook/alpha` })).status, 400, '不能轉給自己');
+  assert.equal((await patch(a.id, { forward_url: `http://localhost:${old.address().port}/api/bookings?lineWebhook=ALPHA` })).status, 200);
+  assert.equal((await patch(b.id, { forward_url: 'http://127.0.0.1:1/down' })).status, 200);
+
+  const payload = JSON.stringify({ events: [{ type: 'message', source: { type: 'user', userId: 'U5' }, replyToken: 'r', message: { type: 'text', text: '你好 😊' } }] });
+  const sign = (secret) => crypto.createHmac('sha256', secret).update(payload).digest('base64');
+  const post = (slug, sig, extra = {}) => fetch(`${base}/webhook/${slug}`, { method: 'POST', body: payload, headers: { 'x-line-signature': sig, ...extra } });
+
+  assert.equal((await post('alpha', sign('secA'))).status, 200);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(received.length, 1);
+  assert.equal(received[0].path, '/api/bookings?lineWebhook=ALPHA', '網址參數保留');
+  assert.equal(received[0].body.toString(), payload, '內容一字不差');
+  assert.equal(received[0].sig, sign('secA'), '簽章原樣帶過去，舊系統可照常驗證');
+  assert.ok(store.getCustomerByLineId(a.id, 'U5'), '本系統照常建檔');
+
+  // 有轉送的品牌不使用 replyToken（留給原本系統回覆），但仍記錄匯款回報
+  const ca = store.getCustomerByLineId(a.id, 'U5');
+  const order = store.createOrder(ca.id, { order_date: '2026-10-15', payment_due_date: '2026-10-16', amount: 1000 });
+  const paid = JSON.stringify({ events: [{ type: 'message', source: { type: 'user', userId: 'U5' }, replyToken: 'r2', message: { type: 'text', text: '已匯款 末五碼 12345' } }] });
+  await fetch(`${base}/webhook/alpha`, { method: 'POST', body: paid, headers: { 'x-line-signature': crypto.createHmac('sha256', 'secA').update(paid).digest('base64') } });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.match(store.getOrder(order.id).payment_report, /12345/);
+  assert.equal(lines.for(a).replies.length, 0, '不搶原本系統的回覆');
+  received.length = 1;
+
+  assert.equal((await post('alpha', 'bad')).status, 401);
+  assert.equal((await post('alpha', sign('secA'), { 'x-crm-forwarded': '1' })).status, 200);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(received.length, 1, '簽章錯誤或已轉送過的請求不再轉送');
+
+  // 舊系統連不上：本系統照常處理，並記錄失敗
+  assert.equal((await post('beta', sign('secB'))).status, 200);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(store.getCustomerByLineId(b.id, 'U5'));
+  const brands = await (await fetch(`${base}/api/brands`, { headers: auth })).json();
+  const [sa, sb] = [brands.find((x) => x.id === a.id).forward_status, brands.find((x) => x.id === b.id).forward_status];
+  assert.equal(sa.ok, true);
+  assert.equal(sb.ok, false);
+  assert.ok(sb.error);
+
+  // 清空 = 不再轉送
+  await patch(a.id, { forward_url: '' });
+  assert.equal(store.getBrand(a.id).forward_url, null);
+});

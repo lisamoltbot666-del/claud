@@ -9,6 +9,7 @@ import { addDays, today } from './dates.js';
 import { ORDER_STATUSES, openDb } from './db.js';
 import { buildFocusList } from './focus.js';
 import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
+import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
 import { LineRegistry, verifySignature } from './line.js';
 import { ReminderService, brandInfo, startScheduler, templates } from './reminders.js';
 import { WebhookHandler } from './webhook.js';
@@ -61,9 +62,15 @@ const csvCell = (v) => {
 };
 
 // 後台看到的品牌資料：不回傳金鑰本身
-function publicBrand(b) {
+function publicBrand(b, store) {
   const { channel_secret: secret, channel_access_token: token, ...rest } = b;
-  return { ...rest, has_secret: Boolean(secret), has_token: Boolean(token), token_hint: token && token.length >= 20 ? `…${token.slice(-4)}` : '' };
+  return {
+    ...rest,
+    has_secret: Boolean(secret),
+    has_token: Boolean(token),
+    token_hint: token && token.length >= 20 ? `…${token.slice(-4)}` : '',
+    forward_status: store && b.forward_url ? forwardStatus(store, b.id) : null,
+  };
 }
 
 // 第一次啟動：用 .env 的 LINE 金鑰建立第一個品牌（或補上舊版遷移出來的「預設品牌」）
@@ -103,7 +110,7 @@ export function ensureInitialBrands(store, config, logger = console) {
   return created;
 }
 
-export function createApp({ store, lines = new LineRegistry(), config, logger = console }) {
+export function createApp({ store, lines = new LineRegistry(), config, logger = console, fetchImpl = globalThis.fetch }) {
   const webhook = new WebhookHandler({ store, lines, logger });
   const reminders = new ReminderService({ store, lines, config, logger });
 
@@ -116,6 +123,15 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
   const mustOrder = (id) => store.getOrder(id) || (() => { throw new HttpError(404, '找不到訂單'); })();
   const mustBrand = (id) => store.getBrand(id) || (() => { throw new HttpError(404, '找不到品牌'); })();
   // ?brand=<id>：只看單一品牌；空白 = 全部品牌
+  // 轉送網址不能指回本系統，否則會無限轉送
+  const notSelf = (forwardUrl, req) => {
+    if (!forwardUrl) return;
+    try {
+      if (new URL(forwardUrl).host === req.headers.host) throw new HttpError(400, '轉送網址不能是本系統自己的網址');
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+    }
+  };
   const brandParam = (url) => (url.searchParams.get('brand') ? toId(url.searchParams.get('brand')) : null);
   const badRequest = (fn) => {
     try {
@@ -127,7 +143,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
 
   const routes = [
     ['GET', /^\/api\/status$/, () => ({
-      brands: store.listBrands().map(publicBrand),
+      brands: store.listBrands().map((b) => publicBrand(b, store)),
       staffCount: reminders.staffTargets().length,
       dailyReportHour: config.dailyReportHour,
       autoPaymentReminder: config.autoPaymentReminder,
@@ -136,14 +152,15 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       today: today(config.tz),
       orderStatuses: ORDER_STATUSES,
     })],
-    ['GET', /^\/api\/brands$/, () => store.listBrands().map(publicBrand)],
-    ['POST', /^\/api\/brands$/, (_m, body) => publicBrand(badRequest(() => store.createBrand(body)))],
-    ['PATCH', /^\/api\/brands\/(\d+)$/, ([, id], body) => {
+    ['GET', /^\/api\/brands$/, () => store.listBrands().map((b) => publicBrand(b, store))],
+    ['POST', /^\/api\/brands$/, (_m, body, _u, req) => { notSelf(body.forward_url, req); return publicBrand(badRequest(() => store.createBrand(body)), store); }],
+    ['PATCH', /^\/api\/brands\/(\d+)$/, ([, id], body, _u, req) => {
       const brand = mustBrand(toId(id));
       const fields = { ...body };
       // 金鑰欄位留空代表不修改
       for (const k of ['channel_secret', 'channel_access_token']) if (!fields[k]) delete fields[k];
-      return publicBrand(badRequest(() => store.updateBrand(brand.id, fields)));
+      notSelf(fields.forward_url, req);
+      return publicBrand(badRequest(() => store.updateBrand(brand.id, fields)), store);
     }],
     ['DELETE', /^\/api\/brands\/(\d+)$/, ([, id]) => { badRequest(() => store.deleteBrand(mustBrand(toId(id)).id)); return { ok: true }; }],
     ['POST', /^\/api\/brands\/(\d+)\/sync-followers$/, async ([, id]) => {
@@ -285,11 +302,17 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
         const brand = store.getBrandBySlug(hook[1] || 'default') || (!hook[1] && store.listBrands().length === 1 ? store.listBrands()[0] : null);
         if (!brand) return send(res, 404, 'unknown brand');
         const raw = await readBody(req);
-        if (!verifySignature(brand.channel_secret, raw, req.headers['x-line-signature'])) return send(res, 401, 'invalid signature');
+        const signature = req.headers['x-line-signature'];
+        if (!verifySignature(brand.channel_secret, raw, signature)) return send(res, 401, 'invalid signature');
+        // 同時轉送一份給品牌原本使用的系統（不影響本系統處理）
+        const forwarding = brand.forward_url && !req.headers[FORWARD_HEADER]
+          ? forwardWebhook({ store, brand, raw, signature, fetchImpl, logger })
+          : null;
         let body;
-        try { body = JSON.parse(raw.toString('utf8')); } catch { return send(res, 400, 'bad json'); }
+        try { body = JSON.parse(raw.toString('utf8')); } catch { send(res, 400, 'bad json'); await forwarding; return; }
         send(res, 200, 'ok'); // 先回 200 給 LINE，再慢慢處理
         await webhook.handle(brand, body);
+        await forwarding;
         return;
       }
       if (url.pathname === '/healthz') return send(res, 200, 'ok');

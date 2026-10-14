@@ -319,6 +319,7 @@ async function loadBrands() {
     <div>
       <h2>${brandTag(b.id)} ${esc(b.name)}</h2>
       <div class="muted" style="margin-top:4px">Webhook URL：<code>${esc(origin)}/webhook/${esc(b.slug)}</code></div>
+      ${b.forward_url ? `<div class="muted">同時轉送到：<code>${esc(b.forward_url)}</code> ${forwardBadge(b.forward_status)}</div>` : ''}
       <div class="muted">Channel secret：${b.has_secret ? '<span class="ok">已設定</span>' : '<span class="warn">未設定</span>'}｜Access token：${b.has_token ? `<span class="ok">已設定 ${esc(b.token_hint)}</span>` : '<span class="warn">未設定</span>'}${b.bank_info ? `｜匯款資訊：${esc(b.bank_info)}` : ''}</div>
     </div>
     <div class="actions">
@@ -361,7 +362,15 @@ function brandFields(b = {}) {
     <label>代表色<input name="color" type="color" value="${esc(b.color || '#06c755')}"></label>
     <label class="wide">Channel secret<input name="channel_secret" type="password" autocomplete="off" placeholder="${b.has_secret ? '已設定，留空表示不修改' : '請貼上'}"></label>
     <label class="wide">Channel access token（長期）<input name="channel_access_token" type="password" autocomplete="off" placeholder="${b.has_token ? '已設定，留空表示不修改' : '請貼上'}"></label>
-    ${f('bank_info', '匯款資訊（會放進匯款提醒）').replace('<label>', '<label class="wide">')}`;
+    ${f('bank_info', '匯款資訊（會放進匯款提醒）').replace('<label>', '<label class="wide">')}
+    ${f('forward_url', '同時轉送到（原本填在 LINE 的 Webhook 網址，舊系統還要用才填；不用請留空）', 'type="url" placeholder="https://…"').replace('<label>', '<label class="wide">')}`;
+}
+
+function forwardBadge(st) {
+  if (!st) return '<span class="muted">（尚未收到訊息）</span>';
+  return st.ok
+    ? `<span class="ok">✓ 最近轉送成功 ${fmtTime(st.at)}</span>`
+    : `<span class="warn">✗ 最近轉送失敗 ${fmtTime(st.at)}：${esc(st.error)}</span>`;
 }
 
 $('#new-brand').addEventListener('click', () => {
