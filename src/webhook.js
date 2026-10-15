@@ -1,14 +1,15 @@
+import { PAID_PATTERN, parseBookingForm } from './booking-parse.js';
+import { today } from './dates.js';
 import { ORDER_STATUSES, SERVICE_TYPES } from './db.js';
 
-const PAID_PATTERN = /(已|有)?(匯款|轉帳|付款)(完成|好了|了)|已(匯|轉|付)/;
 const QUERY_PATTERN = /^(查訂單|訂單查詢|我的訂單|查詢訂單)$/;
 
 const NON_TEXT_LABELS = { image: '[圖片]', video: '[影片]', audio: '[語音]', file: '[檔案]', location: '[位置]', sticker: '[貼圖]' };
 
 // 處理 LINE Webhook 事件：自動收集好友資料、紀錄訊息、辨識匯款回報與查詢訂單
 export class WebhookHandler {
-  constructor({ store, lines, logger = console, autoReply = false }) {
-    Object.assign(this, { store, lines, logger, autoReply });
+  constructor({ store, lines, logger = console, autoReply = false, tz = 'Asia/Taipei' }) {
+    Object.assign(this, { store, lines, logger, autoReply, tz });
   }
 
   async handle(brand, body) {
@@ -75,6 +76,17 @@ export class WebhookHandler {
     const msg = event.message || {};
     const text = msg.type === 'text' ? msg.text : NON_TEXT_LABELS[msg.type] || `[${msg.type}]`;
     this.store.addMessage(customer.id, 'in', text, msg.type || 'text');
+
+    // 預約單：姓名、電話自動填進客戶資料（只填空白欄位，不覆蓋客服填過的）
+    if (msg.type === 'text') {
+      const form = parseBookingForm(msg.text, today(this.tz));
+      if (form) {
+        const fill = {};
+        if (form.real_name && !customer.real_name) fill.real_name = form.real_name;
+        if (form.phone && !customer.phone) fill.phone = form.phone;
+        if (Object.keys(fill).length) this.store.updateCustomer(customer.id, fill);
+      }
+    }
 
     const pending = this.store.latestPendingOrder(customer.id);
 

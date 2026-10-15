@@ -16,6 +16,7 @@ import { findDuplicates, mergeCustomers } from './merge.js';
 import { LOST_REASONS, buildFunnel, leadInfo, markLost, reopenLead } from './leads.js';
 import { buildReport } from './report.js';
 import { buildWeekly } from './weekly.js';
+import { latestBookingDraft } from './booking-parse.js';
 import { buildResponse } from './response.js';
 import { buildTargets, setTarget } from './targets.js';
 import { buildDriverStats } from './driverstats.js';
@@ -127,7 +128,7 @@ export function ensureInitialBrands(store, config, logger = console) {
 }
 
 export function createApp({ store, lines = new LineRegistry(), config, logger = console, fetchImpl = globalThis.fetch }) {
-  const webhook = new WebhookHandler({ store, lines, logger, autoReply: config.autoReply });
+  const webhook = new WebhookHandler({ store, lines, logger, autoReply: config.autoReply, tz: config.tz });
   const reminders = new ReminderService({ store, lines, config, logger });
   const auth = new Auth({ store, config });
   seedTemplates(store);
@@ -260,13 +261,27 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       const orders = store.listOrders({ customerId: c.id });
       const duplicates = (findDuplicates(store, { brandId: c.brand_id, customerId: c.id })[0] || []).filter((d) => d.id !== c.id);
       const lead = leadInfo(store, config, c.id);
-      return { drivers: driverHistory(store, c.id), lead: lead && { date: lead.date, status: lead.status, age: lead.age, reason: c.lead_lost_reason, note: c.lead_lost_note, by: c.lead_lost_by, at: c.lead_lost_at }, lostReasons: LOST_REASONS, customer: { ...c, is_staff: store.staffIds().includes(c.id), is_weekly: store.weeklyIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
+      return { booking: latestBookingDraft(store, c.id, today(config.tz)), drivers: driverHistory(store, c.id), lead: lead && { date: lead.date, status: lead.status, age: lead.age, reason: c.lead_lost_reason, note: c.lead_lost_note, by: c.lead_lost_by, at: c.lead_lost_at }, lostReasons: LOST_REASONS, customer: { ...c, is_staff: store.staffIds().includes(c.id), is_weekly: store.weeklyIds().includes(c.id) }, brand: publicBrand(store.getBrand(c.brand_id)), stats: customerStats(c, orders, config), orders, messages: store.listMessages(c.id), reminders: store.listReminders(c.id), duplicates, activity: store.listActivity({ customerId: c.id, limit: 50 }) };
     }],
     ['POST', /^\/api\/customers\/(\d+)\/staff$/, ([, id], body, _u, req) => {
       const c = mustCustomer(toId(id));
       if (body.staff && !(c.line_user_id && c.is_friend)) throw new HttpError(400, '這位不是 LINE 好友，無法接收通知');
       store.setStaff(c.id, Boolean(body.staff));
       log(req, body.staff ? '設為每日清單接收人' : '取消每日清單接收人', { customerId: c.id, detail: label(c) });
+      return { ok: true };
+    }],
+    // 預約單：略過（之後不再顯示這張及更早的）；匯款回報：已核對
+    ['POST', /^\/api\/customers\/(\d+)\/booking\/dismiss$/, ([, id], body, _u, req) => {
+      const c = mustCustomer(toId(id));
+      store.setKv(`booking_dismiss:${c.id}`, String(toId(body.messageId)));
+      log(req, '略過預約單', { customerId: c.id });
+      return { ok: true };
+    }],
+    ['POST', /^\/api\/customers\/(\d+)\/payment-claim\/ack$/, ([, id], _b, _u, req) => {
+      const c = mustCustomer(toId(id));
+      const last = store.get("SELECT MAX(id) AS id FROM messages WHERE customer_id = ? AND direction = 'in'", c.id)?.id || 0;
+      store.setKv(`payment_claim_ack:${c.id}`, String(last));
+      log(req, '核對客人轉帳回報', { customerId: c.id });
       return { ok: true };
     }],
     ['POST', /^\/api\/customers\/(\d+)\/weekly$/, ([, id], body, _u, req) => {
@@ -310,6 +325,11 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     ['POST', /^\/api\/orders$/, (_m, body, _u, req) => {
       const c = mustCustomer(toId(body.customer_id));
       const orderDate = body.order_date || today(config.tz);
+      // 從預約單建立：確認訊息屬於這位客人
+      if (body.source_message_id) {
+        const msg = store.get('SELECT id FROM messages WHERE id = ? AND customer_id = ?', Number(body.source_message_id), c.id);
+        body = { ...body, source_message_id: msg ? msg.id : null };
+      }
       const o = badRequest(() => store.createOrder(c.id, {
         ...body,
         amount: Math.round(Number(body.amount) || 0),

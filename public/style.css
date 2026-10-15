@@ -144,3 +144,5 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .meter.good { background: var(--brand); }
 .target-input { width: 120px; }
 .ok { color: var(--brand); }
+
+.booking-fields { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin-top: 8px; }
