@@ -551,11 +551,11 @@ async function openPayments(orderId, customerId) {
     </tbody></table></div>` : '<p class="muted">還沒有收款紀錄。</p>'}
     ${cancelled || due || !payments.length ? `<form id="pay-form" class="grid order-form" style="margin-top:6px">
       <label>金額<input name="amount" type="number" min="1" required value="${cancelled ? (paid > 0 ? paid : '') : due || ''}"></label>
-      <label>類型<select name="kind">${cancelled ? opt({ refund: PAY_KINDS.refund, cancel_fee: PAY_KINDS.cancel_fee }, paid > 0 ? 'refund' : 'cancel_fee') : opt(Object.fromEntries(Object.entries(PAY_KINDS).filter(([k]) => !['refund', 'cancel_fee'].includes(k))), paid > 0 ? 'balance' : 'deposit')}</select></label>
+      <label>類型<select name="kind">${cancelled ? opt({ refund: PAY_KINDS.refund, cancel_fee: PAY_KINDS.cancel_fee, deposit: `${PAY_KINDS.deposit}（補記）` }, paid > 0 ? 'refund' : 'cancel_fee') : opt(Object.fromEntries(Object.entries(PAY_KINDS).filter(([k]) => !['refund', 'cancel_fee'].includes(k))), paid > 0 ? 'balance' : 'deposit')}</select></label>
       <label>方式<select name="method">${opt(PAY_METHODS, 'transfer')}</select></label>
       <label>收款日<input name="paid_on" type="date" value="${TODAY}"></label>
       <label class="wide">備註<input name="note" placeholder="如：末五碼 35751、司機代收"></label>
-      <div class="row" style="grid-column:1/-1"><button type="submit">${cancelled ? '記錄' : '記錄收款'}</button><span class="muted">${cancelled ? '退款＝退還給客人的錢；取消費＝另外向客人收的取消費用。保留下來的金額會計入營業額' : '收齊後訂單會自動變成「已付款」'}</span></div>
+      <div class="row" style="grid-column:1/-1"><button type="submit">${cancelled ? '記錄' : '記錄收款'}</button><span class="muted">${cancelled ? '退款＝退還給客人的錢；取消費＝另外向客人收的取消費用；訂金（補記）＝取消前已收、但忘了記的訂金。保留下來的金額會計入營業額；記錯的紀錄可以按「刪除」' : '收齊後訂單會自動變成「已付款」'}</span></div>
     </form>` : ''}`;
   panel.scrollIntoView({ block: 'center' });
   $('#pay-close').onclick = () => { panel.hidden = true; };
@@ -579,18 +579,29 @@ const amountCell = (o) => `${money(o.amount)}${o.status === 'pending_payment' &&
 
 // 改狀態；改成「已取消」且客人已付款時，問要保留訂金還是退還
 async function changeOrderStatus(orderId, status, order) {
-  // 已付款／已派車／已完成但沒有收款紀錄（用「確認入帳」的舊訂單）：視為已付全額
-  const implicit = ['paid', 'shipped', 'completed'].includes(order?.status) ? Math.max(0, order.amount - (order.paid_amount || 0)) : 0;
-  const paid = (order?.paid_amount || 0) + implicit;
+  let received = 0;
   let refund = 0;
-  if (status === 'cancelled' && order?.status !== 'cancelled' && paid > 0) {
-    const keep = confirm(`客人已付 ${money(paid)}。\n\n按「確定」＝保留這筆錢（計入營業額）\n按「取消」＝退還給客人（會記錄一筆退款）`);
-    if (!keep) refund = paid;
-    if (implicit) await api(`/api/orders/${orderId}/payments`, { method: 'POST', body: { amount: implicit, kind: 'full', note: '取消前已付款（補記）' } });
+  if (status === 'cancelled' && order && order.status !== 'cancelled') {
+    const recorded = Math.max(0, order.paid_amount || 0);
+    const settled = ['paid', 'shipped', 'completed'].includes(order.status);
+    // 有收款紀錄、或狀態是已付款類：問客人實際付了多少（例如只付了訂金）
+    if (recorded > 0 || settled) {
+      const ans = prompt(`取消訂單 #${order.id}（金額 ${money(order.amount)}）\n\n客人實際已經付了多少錢？（只付訂金就填訂金金額，沒付填 0）`, String(recorded || (settled ? order.amount : 0)));
+      if (ans === null) return false; // 按取消：不改狀態
+      received = Math.max(0, Math.round(Number(String(ans).replace(/[,\s$NT]/gi, '')) || 0));
+      if (received > recorded) {
+        await api(`/api/orders/${orderId}/payments`, { method: 'POST', body: { amount: received - recorded, kind: received >= order.amount ? 'full' : 'deposit', note: '取消前已收（補記）' } });
+      }
+      if (received > 0) {
+        const keep = confirm(`客人已付 ${money(received)}。\n\n按「確定」＝保留這筆錢（計入營業額）\n按「取消」＝退還給客人（會記錄一筆退款）`);
+        if (!keep) refund = received;
+      }
+    }
   }
   await api(`/api/orders/${orderId}`, { method: 'PATCH', body: { status } });
   if (refund) await api(`/api/orders/${orderId}/payments`, { method: 'POST', body: { amount: refund, kind: 'refund', note: '取消退款' } });
-  toast(status === 'cancelled' && paid > 0 ? (refund ? `已取消，已記錄退款 ${money(refund)}` : `已取消，保留 ${money(paid)}`) : '已更新訂單狀態');
+  toast(status === 'cancelled' && received > 0 ? (refund ? `已取消，已記錄退款 ${money(refund)}` : `已取消，保留 ${money(received)}`) : '已更新訂單狀態');
+  return true;
 }
 
 async function markPaid(orderId) {

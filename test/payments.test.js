@@ -93,6 +93,7 @@ test('取消保留訂金：計入營業額、已收款、目標；退款後不�
   store.updateOrder(o.id, { status: 'cancelled' });
   assert.equal(balanceOf(store.getOrder(o.id)).retained, 300);
   assert.throws(() => addPayment(store, config, o.id, { amount: 100, kind: 'balance' }), /退款.*取消費/);
+  assert.throws(() => addPayment(store, config, o.id, { amount: 100 }), /退款.*取消費/, '沒指定類型也不行');
   assert.throws(() => addPayment(store, config, o.id, { amount: 500, kind: 'refund' }), /不能超過/);
   const range = { from: T, to: addDays(T, 40) };
   let r = buildReport(store, range);
