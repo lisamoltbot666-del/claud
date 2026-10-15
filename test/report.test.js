@@ -88,3 +88,24 @@ test('勾選多個品牌：只算勾選的品牌；比較用的每品牌數字�
   const { getConfig } = await import('../src/config.js');
   assert.equal(buildFunnel(store, getConfig({}), { from: '2026-10-01', to: '2026-10-31', brandIds: [a.id] }).totals.leads, 0);
 });
+
+test('依成交日：今天成交、下個月用車的訂單算在今天；接單金額含待付款', () => {
+  const store = openDb(':memory:');
+  const a = store.createBrand({ slug: 'l', name: '璐米' });
+  const c = store.createCustomer(a.id, { display_name: '客' });
+  store.createOrder(c.id, { order_date: '2026-10-15', service_date: '2026-11-05', amount: 1100, status: 'paid' });
+  store.createOrder(c.id, { order_date: '2026-10-15', service_date: '2026-11-22', amount: 3500, status: 'pending_payment' });
+  store.createOrder(c.id, { order_date: '2026-10-15', service_date: '2026-11-23', amount: 999, status: 'cancelled' });
+  const oct = { from: '2026-10-01', to: '2026-10-31' };
+  assert.equal(buildReport(store, oct).totals.orders, 0, '依用車日：10 月沒有');
+  assert.equal(buildReport(store, { from: '2026-11-01', to: '2026-11-30' }).totals.revenue, 1100, '依用車日：算在 11 月');
+  const r = buildReport(store, { ...oct, basis: 'order', granularity: 'day' });
+  assert.equal(r.basis, 'order');
+  assert.equal(r.totals.orders, 2);
+  assert.equal(r.totals.booked, 4600);
+  assert.equal(r.totals.revenue, 1100, '已付款部分');
+  assert.equal(r.totals.avg_booked, 2300);
+  assert.equal(r.series.find((b) => b.key === '2026-10-15').booked, 4600);
+  assert.equal(r.byBrand[0].booked, 4600);
+  assert.equal(buildReport(store, { ...oct, basis: 'nonsense' }).basis, 'service');
+});

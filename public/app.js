@@ -967,6 +967,21 @@ function bindBrandChart(series, ids) {
   hit.addEventListener('mouseleave', () => { hover.setAttribute('visibility', 'hidden'); tip.hidden = true; });
 }
 let reportG = 'auto';
+let reportBasis = (() => { try { return localStorage.getItem('reportBasis') === 'order' ? 'order' : 'service'; } catch { return 'service'; } })();
+let reportMetric = '營業額';
+const BASIS_NOTE = {
+  service: '依用車日（沒有用車日則用下單日）計算：看每個月實際出車的營業額。營業額＝已付款、已派車、已完成的訂單；待收款＝待付款訂單；取消的不計。',
+  order: '依成交日（下單日）計算：看每天／每月接了多少生意，不管哪天用車。接單金額＝所有未取消的訂單（含待付款）；取消的不計。',
+};
+document.querySelectorAll('#report-basis button').forEach((b) => {
+  b.classList.toggle('active', b.dataset.basis === reportBasis);
+  b.addEventListener('click', () => {
+    reportBasis = b.dataset.basis;
+    try { localStorage.setItem('reportBasis', reportBasis); } catch { /* 無痕模式 */ }
+    document.querySelectorAll('#report-basis button').forEach((x) => x.classList.toggle('active', x === b));
+    guard(loadReport);
+  });
+});
 const G_LABEL = { day: '每日', week: '每週', month: '每月' };
 const pct = (x) => `${Math.round(x * 100)}%`;
 function reportPeriod() {
@@ -976,6 +991,7 @@ function reportPeriod() {
   const last = (yy, mm) => new Date(Date.UTC(yy, mm, 0)).toISOString().slice(0, 10);
   // 整個月／整年（包含已經預約、還沒到用車日的行程）
   if (reportRange === 'last') return [first(y, m - 1), last(y, m - 1)];
+  if (reportRange === 'next') return [first(y, m + 1), last(y, m + 1)];
   if (reportRange === '3m') return [first(y, m - 2), last(y, m)];
   if (reportRange === 'year') return [`${y}-01-01`, `${y}-12-31`];
   if (reportRange === '12m') return [first(y, m - 11), last(y, m)];
@@ -1015,7 +1031,7 @@ function revenueChart(monthly) {
     // 區間多時只標部分刻度，避免文字重疊
     const every = Math.ceil(monthly.length / 14);
     const tick = i % every === 0 || (i === monthly.length - 1 && i % every >= every / 2);
-    return `<g class="band" tabindex="0" data-i="${i}" aria-label="${esc(m.label)} 營業額 NT$${m.revenue.toLocaleString()}，${m.orders} 筆">
+    return `<g class="band" tabindex="0" data-i="${i}" aria-label="${esc(m.label)} ${reportMetric} NT$${m.revenue.toLocaleString()}，${m.orders} 筆">
       <rect x="${left + band * i}" y="${top}" width="${band}" height="${H - top - bottom}" fill="transparent"/>
       ${path ? `<path class="bar" d="${path}"/>` : ''}
       ${showLabel ? `<text class="value-label" x="${cx}" y="${yy - 6}" text-anchor="middle">${short(m.revenue)}</text>` : ''}
@@ -1036,7 +1052,7 @@ function bindChartTips(monthly) {
     const m = monthly[Number(g.dataset.i)];
     const box = g.getBoundingClientRect();
     const host = chart.getBoundingClientRect();
-    tip.innerHTML = `<strong>${esc(m.label)}</strong><br>營業額 ${money(m.revenue)}<br><span class="muted">訂單 ${m.orders} 筆</span>`;
+    tip.innerHTML = `<strong>${esc(m.label)}</strong><br>${reportMetric} ${money(m.revenue)}<br><span class="muted">訂單 ${m.orders} 筆</span>`;
     tip.style.left = `${box.left - host.left + box.width / 2}px`;
     tip.style.top = `${g.querySelector('.bar')?.getBoundingClientRect().top - host.top || box.height / 2}px`;
     tip.hidden = false;
@@ -1053,7 +1069,17 @@ async function loadReport() {
   const [from, to] = reportPeriod();
   renderReportBrands();
   const ids = selectedReportBrands();
-  const r = await api(`/api/report?${new URLSearchParams({ from, to, g: reportG, ...reportBrandParams() })}`);
+  const r = await api(`/api/report?${new URLSearchParams({ from, to, g: reportG, basis: reportBasis, ...reportBrandParams() })}`);
+  $('#report-basis-note').textContent = BASIS_NOTE[r.basis];
+  reportMetric = r.basis === 'order' ? '接單金額' : '營業額';
+  // 依成交日：圖表與明細改看接單金額（含待付款）
+  if (r.basis === 'order') {
+    const swap = (x) => ({ ...x, paid_revenue: x.revenue, revenue: x.booked });
+    r.series = r.series.map((b) => ({ ...swap(b), brands: Object.fromEntries(Object.entries(b.brands).map(([k, v]) => [k, swap(v)])) }));
+    r.byBrand = r.byBrand.map(swap);
+    r.byService = r.byService.map(swap);
+    r.topCustomers = r.topCustomers.map(swap);
+  }
   // 圖表刻度：日 → 10/15、週 → 10/13、月 → 10月
   const series = r.series.map((b) => ({ ...b, tick: r.granularity === 'month' ? `${Number(b.key.slice(5))}月` : `${Number(b.key.slice(5, 7))}/${Number(b.key.slice(8))}` }));
   const t = r.totals;
@@ -1064,32 +1090,34 @@ async function loadReport() {
     <div id="targets-card"></div>
     <p class="muted">期間：${esc(r.from)} ～ ${esc(r.to)}</p>
     <div class="tiles">
-      <div class="tile"><div class="label">營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">已付款 ${t.paid_orders} 筆</div></div>
+      ${r.basis === 'order'
+    ? `<div class="tile"><div class="label">接單金額</div><div class="value">${money(t.booked)}</div><div class="sub">其中已付款 ${money(t.revenue)}（${t.paid_orders} 筆）</div></div>`
+    : `<div class="tile"><div class="label">營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">已付款 ${t.paid_orders} 筆</div></div>`}
       <div class="tile"><div class="label">訂單數</div><div class="value">${t.orders}</div><div class="sub">另有取消 ${t.cancelled} 筆</div></div>
-      <div class="tile"><div class="label">平均客單價</div><div class="value">${money(t.avg_order)}</div><div class="sub">&nbsp;</div></div>
+      <div class="tile"><div class="label">平均客單價</div><div class="value">${money(r.basis === 'order' ? t.avg_booked : t.avg_order)}</div><div class="sub">&nbsp;</div></div>
       <div class="tile"><div class="label">待收款</div><div class="value">${money(t.receivable)}</div><div class="sub">${t.receivable_orders} 筆待付款</div></div>
       <div class="tile"><div class="label">客人數</div><div class="value">${t.customers}</div><div class="sub">新客 ${t.new_customers}・回頭客 ${t.repeat_customers}</div></div>
       <div class="tile"><div class="label">回頭客比例</div><div class="value">${pct(t.repeat_rate)}</div><div class="sub">之前也訂過的客人</div></div>
     </div>
 
-    <h3>${G_LABEL[r.granularity]}營業額</h3>
+    <h3>${G_LABEL[r.granularity]}${reportMetric}</h3>
     <div class="card">${revenueChart(series)}</div>
-    ${ids.length >= 2 ? `<h3>各品牌比較（${G_LABEL[r.granularity]}營業額）</h3><div class="card">${brandTrendChart(series, ids)}</div>` : ''}
+    ${ids.length >= 2 ? `<h3>各品牌比較（${G_LABEL[r.granularity]}${reportMetric}）</h3><div class="card">${brandTrendChart(series, ids)}</div>` : ''}
 
     <h3>各品牌</h3>
-    <div class="table-wrap"><table><thead><tr><th>品牌</th><th>營業額</th><th></th><th>訂單</th><th>客人</th><th>回頭客比例</th><th>待收款</th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>品牌</th><th>${reportMetric}</th><th></th><th>訂單</th><th>客人</th><th>回頭客比例</th><th>待收款</th></tr></thead><tbody>
       ${r.byBrand.map((b) => `<tr><td>${brandTag(b.brand_id)}</td><td>${money(b.revenue)}</td><td style="width:30%"><div class="meter" style="width:${(b.revenue / maxBrand) * 100}%"></div></td><td>${b.orders}</td><td>${b.customers}</td><td>${pct(b.customers ? b.repeat_customers / b.customers : 0)}</td><td>${money(b.receivable)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">這段期間沒有訂單</td></tr>'}
     </tbody></table></div>
 
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
-      <div><h3>各服務</h3><div class="table-wrap"><table><thead><tr><th>服務</th><th>訂單</th><th>營業額</th></tr></thead><tbody>
+      <div><h3>各服務</h3><div class="table-wrap"><table><thead><tr><th>服務</th><th>訂單</th><th>${reportMetric}</th></tr></thead><tbody>
         ${r.byService.map((s) => `<tr><td>${esc(s.label)}</td><td>${s.orders}</td><td>${money(s.revenue)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">—</td></tr>'}</tbody></table></div></div>
-      <div><h3>消費前 10 名</h3><div class="table-wrap"><table><thead><tr><th>客戶</th><th>訂單</th><th>營業額</th></tr></thead><tbody>
+      <div><h3>消費前 10 名</h3><div class="table-wrap"><table><thead><tr><th>客戶</th><th>訂單</th><th>${reportMetric}</th></tr></thead><tbody>
         ${r.topCustomers.map((c) => `<tr class="clickable" data-open="${c.customer_id}"><td>${brandTag(c.brand_id)}${esc(c.real_name || c.display_name)}</td><td>${c.orders}</td><td>${money(c.revenue)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">—</td></tr>'}</tbody></table></div></div>
     </div>
 
     <h3>${G_LABEL[r.granularity]}明細（各品牌）</h3>
-    <div class="table-wrap"><table><thead><tr><th>${{ day: '日期', week: '週', month: '月份' }[r.granularity]}</th><th>營業額</th><th>訂單</th>${brandsInTable.map((b) => `<th>${esc(b.name)}</th>`).join('')}</tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>${{ day: '日期', week: '週', month: '月份' }[r.granularity]}</th><th>${reportMetric}</th><th>訂單</th>${brandsInTable.map((b) => `<th>${esc(b.name)}</th>`).join('')}</tr></thead><tbody>
       ${[...series].reverse().map((m) => `<tr><td>${esc(m.label)}</td><td>${money(m.revenue)}</td><td>${m.orders}</td>${brandsInTable.map((b) => `<td>${m.brands[b.id] ? `${money(m.brands[b.id].revenue)}<div class="muted">${m.brands[b.id].orders} 筆</div>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`).join('')}
     </tbody></table></div>
     <div id="funnel-section"></div>

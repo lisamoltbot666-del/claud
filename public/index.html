@@ -104,9 +104,14 @@
         <div class="seg" id="report-range">
           <button data-range="month" class="active">本月</button>
           <button data-range="last">上月</button>
+          <button data-range="next">下個月</button>
           <button data-range="3m">近 3 個月</button>
           <button data-range="year">今年</button>
           <button data-range="12m">近 12 個月</button>
+        </div>
+        <div class="seg" id="report-basis" title="訂單歸在哪一天">
+          <button data-basis="service" class="active">依用車日</button>
+          <button data-basis="order">依成交日</button>
         </div>
         <div class="seg" id="report-g" title="趨勢與明細的單位">
           <button data-g="auto" class="active">自動</button>
@@ -118,7 +123,8 @@
         <span class="spacer"></span>
       </div>
       <div class="toolbar" id="report-brands"></div>
-      <p class="muted">依用車日（沒有用車日則用下單日）計算。營業額＝已付款、已派車、已完成的訂單；待收款＝待付款訂單；取消的不計。回頭客＝這段期間有訂單、而且之前也訂過的客人。可勾選一個或多個品牌比較（不受左上角品牌選單影響）。</p>
+      <p class="muted" id="report-basis-note"></p>
+      <p class="muted">回頭客＝這段期間有訂單、而且之前也訂過的客人。可勾選一個或多個品牌比較（不受左上角品牌選單影響）。</p>
       <div id="report-body"></div>
     </section>
 
