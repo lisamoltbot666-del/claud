@@ -44,6 +44,14 @@ export function buildTargets(store, config, { month = null, brandIds = null, now
        WHERE o.status != 'cancelled' AND c.brand_id = ? AND ${DAY} BETWEEN ? AND ?`,
       cut, cut, b.id, from, to,
     );
+    // 取消但保留的訂金也算達成
+    const kept = store.get(
+      `SELECT COALESCE(SUM(MAX(0, (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.order_id = o.id))), 0) AS n
+       FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.status = 'cancelled' AND c.brand_id = ? AND ${DAY} BETWEEN ? AND ?`,
+      b.id, from, to,
+    ).n;
+    r.achieved += kept;
+    r.past += kept;
     const remaining = days - elapsed;
     const pace = elapsed ? r.past / elapsed : 0;
     const projection = elapsed >= days ? r.achieved : Math.round(r.past + Math.max(r.booked, pace * remaining));
