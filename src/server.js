@@ -455,7 +455,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     // ---------- 營收報表（管理員）----------
     ['GET', /^\/api\/report$/, (_m, _b, url) => {
       const t = today(config.tz);
-      return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), brandIds: brandsParam(url), granularity: url.searchParams.get('g') || 'auto' }));
+      return badRequest(() => buildReport(store, { from: url.searchParams.get('from') || `${t.slice(0, 7)}-01`, to: url.searchParams.get('to') || t, brandId: brandParam(url), brandIds: brandsParam(url), granularity: url.searchParams.get('g') || 'auto', basis: url.searchParams.get('basis') || 'service' }));
     }, { admin: true }],
     // ---------- 客服回覆速度、營收目標、司機統計（管理員）----------
     ['GET', /^\/api\/response$/, (_m, _b, url) => {
