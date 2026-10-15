@@ -193,7 +193,7 @@ const TRIP_COLUMNS = ['service_type', 'service_date', 'service_time', 'flight_no
 
 const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
 const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info', 'forward_url', 'review_url', 'rebook_offer'];
-const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note', ...TRIP_COLUMNS];
+const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note', 'source_message_id', ...TRIP_COLUMNS];
 
 const nowIso = () => new Date().toISOString();
 const plain = (row) => (row ? { ...row } : row);
@@ -222,7 +222,7 @@ export function openDb(dbPath) {
   }
   // 訂單指派的司機、派車單送出時間
   // 指派當下司機與車輛的資料（之後司機換車、改電話，舊訂單仍保留當時的紀錄）
-  for (const col of ['driver_id INTEGER', 'dispatched_at TEXT', 'driver_name_snap TEXT', 'driver_phone_snap TEXT', 'driver_plate_snap TEXT', 'driver_car_snap TEXT']) {
+  for (const col of ['source_message_id INTEGER', 'driver_id INTEGER', 'dispatched_at TEXT', 'driver_name_snap TEXT', 'driver_phone_snap TEXT', 'driver_plate_snap TEXT', 'driver_car_snap TEXT']) {
     if (!db.prepare('PRAGMA table_info(orders)').all().some((r) => r.name === col.split(' ')[0])) db.exec(`ALTER TABLE orders ADD COLUMN ${col}`);
   }
   // 舊版已指派司機的訂單：補上當時的司機資料

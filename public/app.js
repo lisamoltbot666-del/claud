@@ -115,6 +115,8 @@ async function loadFocus() {
       </div>
       <div class="actions">
         ${verifyOrder ? `<button class="small" data-paid="${verifyOrder}">確認已入帳</button>` : ''}
+        ${actions.has('booking') ? `<button class="small" data-compose="${c.id}" data-kind="booking">查看預約單並建立訂單</button>` : ''}
+        ${actions.has('claim') ? `<button class="small" data-open="${c.id}">查看對話與訂單</button><button class="small secondary" data-claim-ack="${c.id}">已核對</button>` : ''}
         ${dispatchOrder ? `<button class="small" data-dispatch="${dispatchOrder}">派車</button>` : ''}
         ${tripOrder && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="trip" data-order="${tripOrder}">發送行程確認</button>` : ''}
         ${actions.has('payment') && item.canPush ? `<button class="small" data-compose="${c.id}" data-kind="payment" data-order="${payOrder}">發送匯款提醒</button>` : ''}
@@ -263,7 +265,7 @@ $('#order-when').addEventListener('change', () => guard(loadOrders));
 // ---------- customer drawer ----------
 async function openCustomer(id, compose = null) {
   currentCustomerId = id;
-  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity, lead, lostReasons, drivers } = await api(`/api/customers/${id}`);
+  const { customer: c, brand, stats: st, orders, messages, reminders, duplicates, activity, lead, lostReasons, drivers, booking } = await api(`/api/customers/${id}`);
   const canPush = c.line_user_id && c.is_friend;
   const pendingOrders = orders.filter((o) => o.status === 'pending_payment');
   const lastDone = orders.filter((o) => ['paid', 'shipped', 'completed'].includes(o.status) && o.service_date && o.service_date < TODAY).sort((a, b) => (a.service_date < b.service_date ? 1 : -1))[0];
@@ -280,6 +282,15 @@ async function openCustomer(id, compose = null) {
       <button class="secondary" id="close-drawer">關閉</button>
     </div>
 
+    ${booking ? (() => {
+      const f = booking.fields;
+      const rows = [['服務', SERVICES[f.service_type]], ['日期', f.service_date], ['時間', f.service_time], ['航班', f.flight_no], ['上車', f.pickup], ['下車', f.dropoff], ['車型', f.items], ['姓名', f.real_name], ['電話', f.phone], ['備註', f.note]].filter(([, v]) => v);
+      return `<div class="card" id="booking-card" style="margin-top:12px;border-left:4px solid var(--brand)">
+        <strong>📋 偵測到預約單</strong> <span class="muted">${fmtTime(booking.at)} 客人傳來</span>
+        <div class="booking-fields">${rows.map(([k, v]) => `<span class="muted">${k}</span><span>${esc(v)}</span>`).join('')}</div>
+        <div class="row" style="margin-top:8px"><button class="small" id="booking-fill">帶入訂單</button><button class="small secondary" id="booking-dismiss">略過</button>
+        <span class="muted">帶入後請確認內容、填上金額再按「新增訂單」</span></div></div>`;
+    })() : ''}
     ${duplicates.length ? `<div class="card" style="border-left:4px solid var(--amber);margin-top:12px">
       <strong>可能是同一個人</strong> <span class="muted">（同品牌、電話或姓名相同）</span>
       ${duplicates.map((d) => `<div class="row" style="margin-top:6px"><span class="name" data-open="${d.id}">${esc(nameOf(d))}</span>
@@ -334,7 +345,7 @@ async function openCustomer(id, compose = null) {
       </tr>`).join('') || '<tr><td colspan="7" class="empty">尚無訂單</td></tr>'}</tbody>
     </table></div>
     <form id="order-form" class="grid order-form" style="margin-top:8px">
-      <input type="hidden" name="id">
+      <input type="hidden" name="id"><input type="hidden" name="source_message_id">
       <label>服務<select name="service_type"><option value="">—</option>${Object.entries(SERVICES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
       <label>用車 / 取車日<input name="service_date" type="date"></label>
       <label>時間<input name="service_time" type="time"></label>
@@ -346,6 +357,7 @@ async function openCustomer(id, compose = null) {
       <label>金額<input name="amount" type="number" required></label>
       <label>下單日<input name="order_date" type="date" title="預設今天"></label>
       <label>狀態<select name="status">${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
+      <label class="wide">備註<input name="note" placeholder="如：4 人、行李 6 件、兒童座椅"></label>
       <div class="row" style="grid-column:1/-1"><button type="submit" id="order-submit">新增訂單</button><button type="button" class="secondary" id="order-cancel" hidden>取消編輯</button></div>
     </form>
 
@@ -392,6 +404,7 @@ async function openCustomer(id, compose = null) {
   }); };
   if ($('#lead-reopen')) $('#lead-reopen').onclick = () => guard(async () => { await api(`/api/customers/${id}/lead`, { method: 'POST', body: { lost: false } }); openCustomer(id); });
   if (compose?.kind === 'lead') $('#lead-section')?.scrollIntoView({ block: 'center' });
+  if (compose?.kind === 'booking') $('#booking-card')?.scrollIntoView({ block: 'center' });
   document.querySelectorAll('[data-merge-in]').forEach((b) => b.onclick = () => guard(() => mergeInto(id, Number(b.dataset.mergeIn))));
   $('#merge-search').oninput = () => {
     clearTimeout(mergeTimer);
@@ -444,6 +457,31 @@ async function openCustomer(id, compose = null) {
     orderForm.scrollIntoView({ block: 'center' });
   });
   $('#order-cancel').onclick = () => openCustomer(id);
+  if (booking) {
+    $('#booking-fill').onclick = () => guard(async () => {
+      const f = booking.fields;
+      // 客戶資料空白的姓名、電話一併補上
+      const fill = {};
+      if (f.real_name && !c.real_name) fill.real_name = f.real_name;
+      if (f.phone && !c.phone) fill.phone = f.phone;
+      if (Object.keys(fill).length) {
+        await api(`/api/customers/${id}`, { method: 'PATCH', body: fill });
+        for (const [k, v] of Object.entries(fill)) { const el = $('#customer-form').elements[k]; if (el) el.value = v; }
+      }
+      for (const k of ['service_type', 'service_date', 'service_time', 'flight_no', 'pickup', 'dropoff', 'return_date', 'items', 'note']) {
+        if (f[k] && orderForm.elements[k]) orderForm.elements[k].value = f[k];
+      }
+      orderForm.elements.source_message_id.value = booking.message_id;
+      orderForm.elements.status.value = 'pending_payment';
+      orderForm.scrollIntoView({ block: 'center' });
+      orderForm.elements.amount.focus();
+      toast('已帶入，請填上金額後按「新增訂單」');
+    });
+    $('#booking-dismiss').onclick = () => guard(async () => {
+      await api(`/api/customers/${id}/booking/dismiss`, { method: 'POST', body: { messageId: booking.message_id } });
+      toast('已略過'); openCustomer(id);
+    });
+  }
   document.querySelectorAll('[data-order-status]').forEach((sel) => sel.onchange = () => guard(async () => {
     await api(`/api/orders/${sel.dataset.orderStatus}`, { method: 'PATCH', body: { status: sel.value } });
     toast('已更新訂單狀態'); openCustomer(id);
@@ -476,7 +514,7 @@ async function openCustomer(id, compose = null) {
     e.target.value = '';
   });
   $('#mark-handled').onclick = () => guard(async () => { await api(`/api/customers/${id}/handled`, { method: 'POST' }); toast('已標記'); });
-  if (compose && compose.kind !== 'lead') await applyTemplate(id, compose.kind, compose.orderId);
+  if (compose && !['lead', 'booking'].includes(compose.kind)) await applyTemplate(id, compose.kind, compose.orderId);
 }
 
 async function applyTemplate(customerId, kind, orderId) {
@@ -703,8 +741,9 @@ function refreshCurrentTab() {
 
 // 共用的點擊事件
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-open],[data-compose],[data-handled],[data-postpone],[data-paid],[data-dispatch]');
+  const t = e.target.closest('[data-open],[data-compose],[data-handled],[data-postpone],[data-paid],[data-dispatch],[data-claim-ack]');
   if (!t) return;
+  if (t.dataset.claimAck) return guard(async () => { await api(`/api/customers/${t.dataset.claimAck}/payment-claim/ack`, { method: 'POST' }); toast('已標記核對'); currentCustomerId ? openCustomer(currentCustomerId) : refreshCurrentTab(); });
   if (t.dataset.dispatch) return guard(() => openDispatch(Number(t.dataset.dispatch)));
   if (t.dataset.paid) return guard(async () => { await markPaid(t.dataset.paid); currentCustomerId ? openCustomer(currentCustomerId) : refreshCurrentTab(); });
   if (t.dataset.compose) return guard(() => openCustomer(Number(t.dataset.compose), { kind: t.dataset.kind, orderId: t.dataset.order }));

@@ -1,5 +1,6 @@
-import { addDays, dateOf, diffDays, today } from './dates.js';
+import { addDays, dateOf, diffDays, formatDateTime, today } from './dates.js';
 import { SERVICE_TYPES } from './db.js';
+import { PAID_PATTERN, latestBookingDraft } from './booking-parse.js';
 import { leadsToFollowUp } from './leads.js';
 import { customerStats } from './profile.js';
 
@@ -10,6 +11,8 @@ import { customerStats } from './profile.js';
 //   1 未匯款且已逾期
 //   1 未匯款，今天到期
 //   1 今天用車，還沒派車
+//   1 客人傳來預約單（7 天內），還沒建立訂單
+//   1 客人說已轉帳／匯款（3 天內），但沒有待付款訂單可對應，請核對
 //   2 明天用車，還沒傳行程確認
 //   2 未匯款，明天到期
 //   2 客服排定今天（或更早）要聯絡
@@ -58,6 +61,17 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
     return r && dateOf(r.sent_at, tz) > cooldownStart ? r : null;
   };
 
+  // 近 7 天傳過預約單、近 3 天說已轉帳的客人
+  const recentSince = new Date(Date.parse(`${addDays(t, -7)}T00:00:00Z`) - 8 * 3600_000).toISOString();
+  const recentIn = store.all(
+    "SELECT id, customer_id, text, created_at FROM messages WHERE direction = 'in' AND type = 'text' AND created_at >= ? ORDER BY id",
+    recentSince,
+  );
+  const bookingCandidates = new Set(recentIn.filter((m) => /[：:]/.test(m.text || '') && (m.text.match(/\n/g) || []).length >= 2).map((m) => m.customer_id));
+  const claimSince = addDays(t, -3);
+  const claims = new Map();
+  for (const m of recentIn) if (dateOf(m.created_at, tz) >= claimSince && PAID_PATTERN.test(m.text || '')) claims.set(m.customer_id, m);
+
   // 詢問後還沒成交、也沒標記未成交的客人
   const leadFollow = new Map(leadsToFollowUp(store, config, { brandId }).map((l) => [l.customer.id, l]));
 
@@ -91,6 +105,21 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
       } else if (o.service_date === tomorrow && !store.lastReminder(c.id, 'trip', o.id)) {
         reasons.push({ code: 'trip_tomorrow', priority: 2, orderId: o.id, label: '明天用車，請傳行程確認', detail: `訂單 #${o.id} ${tripSummary(o)}`, action: 'trip' });
       }
+    }
+
+    if (bookingCandidates.has(c.id)) {
+      const draft = latestBookingDraft(store, c.id, t, { since: recentSince });
+      if (draft && !list.some((o) => o.created_at > draft.at)) {
+        const f = draft.fields;
+        reasons.push({ code: 'booking_form', priority: 1, label: '客人傳來預約單，請建立訂單', detail: [f.service_date, f.service_time, f.flight_no, [f.pickup, f.dropoff].filter(Boolean).join(' → ')].filter(Boolean).join('｜'), action: 'booking' });
+      }
+    }
+
+    const claim = claims.get(c.id);
+    if (claim && claim.id > Number(store.getKv(`payment_claim_ack:${c.id}`) || 0)) {
+      // 已經對應到待付款訂單（上面「已回報匯款，請核對入帳」）或已確認入帳的就不重複列
+      const handled = list.some((o) => (o.payment_reported_at && o.payment_reported_at >= claim.created_at) || (o.paid_at && o.paid_at >= claim.created_at));
+      if (!handled) reasons.push({ code: 'payment_claim', priority: 1, label: '客人說已轉帳，請核對入帳並建立／更新訂單', detail: `「${claim.text.replace(/\s+/g, ' ').slice(0, 60)}」${formatDateTime(claim.created_at, tz)}`, action: 'claim' });
     }
 
     // 未回覆的訊息不列入：客服在 LINE 官方帳號 App 回覆時 LINE 不會通知本系統，App 本身就有未讀標示
