@@ -67,7 +67,8 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
     "SELECT id, customer_id, text, created_at FROM messages WHERE direction = 'in' AND type = 'text' AND created_at >= ? ORDER BY id",
     recentSince,
   );
-  const bookingCandidates = new Set(recentIn.filter((m) => /[：:]/.test(m.text || '') && (m.text.match(/\n/g) || []).length >= 2).map((m) => m.customer_id));
+  // 有日期＋時間或「欄位：內容」格式的訊息才需要進一步辨識
+  const bookingCandidates = new Set(recentIn.filter((m) => /\d{1,2}\s*[/.月]\s*\d{1,2}|[：:]/.test(m.text || '')).map((m) => m.customer_id));
   const claimSince = addDays(t, -3);
   const claims = new Map();
   for (const m of recentIn) if (dateOf(m.created_at, tz) >= claimSince && PAID_PATTERN.test(m.text || '')) claims.set(m.customer_id, m);

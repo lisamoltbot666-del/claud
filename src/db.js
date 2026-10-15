@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS ${name} (
   lead_lost_at TEXT,
   lead_lost_by TEXT,
   anonymized_at TEXT,            -- 依個資保存規則匿名化的時間
+  tax_id TEXT,                   -- 統一編號（需開統編發票的客戶）
+  invoice_title TEXT,            -- 發票抬頭
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -191,7 +193,7 @@ export const SERVICE_TYPES = {
 
 const TRIP_COLUMNS = ['service_type', 'service_date', 'service_time', 'flight_no', 'pickup', 'dropoff', 'return_date'];
 
-const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date'];
+const CUSTOMER_EDITABLE = ['display_name', 'real_name', 'phone', 'email', 'birthday', 'gender', 'address', 'tags', 'note', 'reorder_days', 'next_contact_date', 'tax_id', 'invoice_title'];
 const BRAND_EDITABLE = ['slug', 'name', 'color', 'channel_secret', 'channel_access_token', 'bank_info', 'forward_url', 'review_url', 'rebook_offer'];
 const ORDER_EDITABLE = ['items', 'amount', 'status', 'order_date', 'payment_due_date', 'payment_report', 'note', 'source_message_id', ...TRIP_COLUMNS];
 
@@ -214,7 +216,7 @@ export function openDb(dbPath) {
   // 詢問未成交原因
   {
     const cols = new Set(db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name));
-    for (const col of ['lead_lost_reason', 'lead_lost_note', 'lead_lost_at', 'lead_lost_by', 'anonymized_at']) if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
+    for (const col of ['lead_lost_reason', 'lead_lost_note', 'lead_lost_at', 'lead_lost_by', 'anonymized_at', 'tax_id', 'invoice_title']) if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
   }
   // 對話、提醒記錄由哪位客服送出
   for (const table of ['messages', 'reminders']) {
