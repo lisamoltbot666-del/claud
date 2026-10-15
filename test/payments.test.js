@@ -86,3 +86,35 @@ test('API：查看、新增、刪除收款紀錄；CSV 有已收／未收', asyn
     server.close();
   }
 });
+
+test('取消保留訂金：計入營業額、已收款、目標；退款後不計；已取消只能記退款或取消費', async () => {
+  const { store, b, o } = setup();
+  addPayment(store, config, o.id, { amount: 300 });
+  store.updateOrder(o.id, { status: 'cancelled' });
+  assert.equal(balanceOf(store.getOrder(o.id)).retained, 300);
+  assert.throws(() => addPayment(store, config, o.id, { amount: 100, kind: 'balance' }), /退款.*取消費/);
+  assert.throws(() => addPayment(store, config, o.id, { amount: 500, kind: 'refund' }), /不能超過/);
+  const range = { from: T, to: addDays(T, 40) };
+  let r = buildReport(store, range);
+  assert.equal(r.totals.orders, 0);
+  assert.equal(r.totals.cancelled, 1);
+  assert.equal(r.totals.cancel_retained, 300);
+  assert.equal(r.totals.revenue, 300, '保留的訂金算營業額');
+  assert.equal(r.totals.collected, 300);
+  assert.equal(r.totals.receivable, 0);
+  assert.equal(r.byBrand[0].revenue, 300);
+  assert.equal(r.series.reduce((a, x) => a + x.revenue, 0), 300);
+  const { buildTargets, setTarget } = await import('../src/targets.js');
+  setTarget(store, { brandId: b.id, month: o.service_date.slice(0, 7), amount: 10000 });
+  assert.equal(buildTargets(store, config, { month: o.service_date.slice(0, 7) }).brands[0].achieved, 300);
+
+  // 另外收取消費、或退款
+  addPayment(store, config, o.id, { amount: 200, kind: 'cancel_fee' });
+  assert.equal(buildReport(store, range).totals.revenue, 500);
+  const after = addPayment(store, config, o.id, { amount: 500, kind: 'refund' });
+  assert.equal(after.paid_amount, 0);
+  assert.equal(listPayments(store, o.id).at(-1).amount, -500, '退款存成負數');
+  r = buildReport(store, range);
+  assert.equal(r.totals.revenue, 0);
+  assert.equal(r.totals.cancel_retained, 0);
+});

@@ -349,7 +349,7 @@ async function openCustomer(id, compose = null) {
         <td>${esc([SERVICES[o.service_type], o.items].filter(Boolean).join(' '))}<div class="muted">${tripRoute(o)}</div>${o.driver_name ? `<div>🚘 ${esc(o.driver_name)}${o.driver_plate ? `｜${esc(o.driver_plate)}` : ''}${o.driver_car ? `｜${esc(o.driver_car)}` : ''}</div>` : ''}</td><td>${amountCell(o)}</td>
         <td><select data-order-status="${o.id}">${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}" ${k === o.status ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
         <td>${o.status === 'pending_payment' ? `${esc(o.payment_due_date || '')}${o.payment_report ? `<div class="muted">回報：${esc(o.payment_report)}</div>` : ''}` : `<span class="muted">${o.paid_at ? `入帳 ${fmtTime(o.paid_at)}` : ''}</span>`}</td>
-        <td>${o.status === 'cancelled' ? '' : `<button class="small" data-pay-order="${o.id}">收款</button>`} ${o.status === 'pending_payment' ? `<button class="small secondary" data-paid="${o.id}" title="直接標記全額已入帳">確認入帳</button>` : ''} ${['cancelled', 'completed'].includes(o.status) ? '' : `<button class="small secondary" data-dispatch="${o.id}">派車</button> `}<button class="small secondary" data-edit-order="${o.id}">編輯</button> <button class="small secondary" data-del-order="${o.id}">刪除</button></td>
+        <td><button class="small${o.status === 'cancelled' ? ' secondary' : ''}" data-pay-order="${o.id}">${o.status === 'cancelled' ? '退款／取消費' : '收款'}</button> ${o.status === 'pending_payment' ? `<button class="small secondary" data-paid="${o.id}" title="直接標記全額已入帳">確認入帳</button>` : ''} ${['cancelled', 'completed'].includes(o.status) ? '' : `<button class="small secondary" data-dispatch="${o.id}">派車</button> `}<button class="small secondary" data-edit-order="${o.id}">編輯</button> <button class="small secondary" data-del-order="${o.id}">刪除</button></td>
       </tr>`).join('') || '<tr><td colspan="7" class="empty">尚無訂單</td></tr>'}</tbody>
     </table></div>
     <div id="payment-panel" class="card" hidden style="margin-top:8px"></div>
@@ -493,8 +493,8 @@ async function openCustomer(id, compose = null) {
     });
   }
   document.querySelectorAll('[data-order-status]').forEach((sel) => sel.onchange = () => guard(async () => {
-    await api(`/api/orders/${sel.dataset.orderStatus}`, { method: 'PATCH', body: { status: sel.value } });
-    toast('已更新訂單狀態'); openCustomer(id);
+    await changeOrderStatus(Number(sel.dataset.orderStatus), sel.value, orders.find((o) => o.id === Number(sel.dataset.orderStatus)));
+    openCustomer(id);
   }));
   document.querySelectorAll('[data-del-order]').forEach((b) => b.onclick = () => guard(async () => {
     if (!confirm('確定刪除這筆訂單？')) return;
@@ -541,20 +541,21 @@ async function openPayments(orderId, customerId) {
   const { order: o, payments } = await api(`/api/orders/${orderId}/payments`);
   const panel = $('#payment-panel');
   const paid = payments.reduce((a, p) => a + p.amount, 0);
-  const due = Math.max(0, o.amount - paid);
+  const cancelled = o.status === 'cancelled';
+  const due = cancelled ? 0 : Math.max(0, o.amount - paid);
   const opt = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
   panel.hidden = false;
-  panel.innerHTML = `<div class="row"><strong>訂單 #${o.id} 收款紀錄</strong><span class="muted">金額 ${money(o.amount)}｜已收 ${money(paid)}｜${due ? `<span class="warn">尾款 ${money(due)}</span>` : '<span class="ok">已收齊</span>'}</span><span class="spacer"></span><button class="small secondary" id="pay-close">關閉</button></div>
+  panel.innerHTML = `<div class="row"><strong>訂單 #${o.id} 收款紀錄</strong><span class="muted">金額 ${money(o.amount)}｜${cancelled ? `已取消｜保留 ${money(Math.max(0, paid))}` : `已收 ${money(paid)}｜${due ? `<span class="warn">尾款 ${money(due)}</span>` : '<span class="ok">已收齊</span>'}`}</span><span class="spacer"></span><button class="small secondary" id="pay-close">關閉</button></div>
     ${payments.length ? `<div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>收款日</th><th>類型</th><th>金額</th><th>方式</th><th>備註</th><th></th></tr></thead><tbody>
-      ${payments.map((p) => `<tr><td>${esc(p.paid_on)}</td><td>${esc(PAY_KINDS[p.kind] || p.kind)}</td><td>${money(p.amount)}</td><td>${esc(PAY_METHODS[p.method] || p.method)}</td><td class="muted">${esc(p.note || '')}${p.created_by ? `<div>${esc(p.created_by)}</div>` : ''}</td><td><button class="small secondary" data-del-pay="${p.id}">刪除</button></td></tr>`).join('')}
+      ${payments.map((p) => `<tr><td>${esc(p.paid_on)}</td><td>${esc(PAY_KINDS[p.kind] || p.kind)}</td><td>${p.amount < 0 ? `<span class="warn">−${money(-p.amount)}</span>` : money(p.amount)}</td><td>${esc(PAY_METHODS[p.method] || p.method)}</td><td class="muted">${esc(p.note || '')}${p.created_by ? `<div>${esc(p.created_by)}</div>` : ''}</td><td><button class="small secondary" data-del-pay="${p.id}">刪除</button></td></tr>`).join('')}
     </tbody></table></div>` : '<p class="muted">還沒有收款紀錄。</p>'}
-    ${due || !payments.length ? `<form id="pay-form" class="grid order-form" style="margin-top:6px">
-      <label>金額<input name="amount" type="number" min="1" required value="${due || ''}"></label>
-      <label>類型<select name="kind">${opt(PAY_KINDS, paid > 0 ? 'balance' : 'deposit')}</select></label>
+    ${cancelled || due || !payments.length ? `<form id="pay-form" class="grid order-form" style="margin-top:6px">
+      <label>金額<input name="amount" type="number" min="1" required value="${cancelled ? (paid > 0 ? paid : '') : due || ''}"></label>
+      <label>類型<select name="kind">${cancelled ? opt({ refund: PAY_KINDS.refund, cancel_fee: PAY_KINDS.cancel_fee }, paid > 0 ? 'refund' : 'cancel_fee') : opt(Object.fromEntries(Object.entries(PAY_KINDS).filter(([k]) => !['refund', 'cancel_fee'].includes(k))), paid > 0 ? 'balance' : 'deposit')}</select></label>
       <label>方式<select name="method">${opt(PAY_METHODS, 'transfer')}</select></label>
       <label>收款日<input name="paid_on" type="date" value="${TODAY}"></label>
       <label class="wide">備註<input name="note" placeholder="如：末五碼 35751、司機代收"></label>
-      <div class="row" style="grid-column:1/-1"><button type="submit">記錄收款</button><span class="muted">收齊後訂單會自動變成「已付款」</span></div>
+      <div class="row" style="grid-column:1/-1"><button type="submit">${cancelled ? '記錄' : '記錄收款'}</button><span class="muted">${cancelled ? '退款＝退還給客人的錢；取消費＝另外向客人收的取消費用。保留下來的金額會計入營業額' : '收齊後訂單會自動變成「已付款」'}</span></div>
     </form>` : ''}`;
   panel.scrollIntoView({ block: 'center' });
   $('#pay-close').onclick = () => { panel.hidden = true; };
@@ -574,7 +575,23 @@ async function openPayments(orderId, customerId) {
 }
 
 // 金額欄：有收訂金時顯示已收／尾款
-const amountCell = (o) => `${money(o.amount)}${o.status === 'pending_payment' && o.paid_amount > 0 ? `<div class="muted">已收 ${money(o.paid_amount)}</div><div class="warn">尾款 ${money(Math.max(0, o.amount - o.paid_amount))}</div>` : ''}`;
+const amountCell = (o) => `${money(o.amount)}${o.status === 'pending_payment' && o.paid_amount > 0 ? `<div class="muted">已收 ${money(o.paid_amount)}</div><div class="warn">尾款 ${money(Math.max(0, o.amount - o.paid_amount))}</div>` : ''}${o.status === 'cancelled' && o.paid_amount > 0 ? `<div class="muted">取消，保留訂金 ${money(o.paid_amount)}</div>` : ''}`;
+
+// 改狀態；改成「已取消」且客人已付款時，問要保留訂金還是退還
+async function changeOrderStatus(orderId, status, order) {
+  // 已付款／已派車／已完成但沒有收款紀錄（用「確認入帳」的舊訂單）：視為已付全額
+  const implicit = ['paid', 'shipped', 'completed'].includes(order?.status) ? Math.max(0, order.amount - (order.paid_amount || 0)) : 0;
+  const paid = (order?.paid_amount || 0) + implicit;
+  let refund = 0;
+  if (status === 'cancelled' && order?.status !== 'cancelled' && paid > 0) {
+    const keep = confirm(`客人已付 ${money(paid)}。\n\n按「確定」＝保留這筆錢（計入營業額）\n按「取消」＝退還給客人（會記錄一筆退款）`);
+    if (!keep) refund = paid;
+    if (implicit) await api(`/api/orders/${orderId}/payments`, { method: 'POST', body: { amount: implicit, kind: 'full', note: '取消前已付款（補記）' } });
+  }
+  await api(`/api/orders/${orderId}`, { method: 'PATCH', body: { status } });
+  if (refund) await api(`/api/orders/${orderId}/payments`, { method: 'POST', body: { amount: refund, kind: 'refund', note: '取消退款' } });
+  toast(status === 'cancelled' && paid > 0 ? (refund ? `已取消，已記錄退款 ${money(refund)}` : `已取消，保留 ${money(paid)}`) : '已更新訂單狀態');
+}
 
 async function markPaid(orderId) {
   if (!confirm(`確認訂單 #${orderId} 已入帳？`)) return;
@@ -1156,7 +1173,7 @@ async function loadReport() {
       ${r.basis === 'order'
     ? `<div class="tile"><div class="label">接單金額</div><div class="value">${money(t.booked)}</div><div class="sub">其中已付款 ${money(t.revenue)}（${t.paid_orders} 筆）</div></div>`
     : `<div class="tile"><div class="label">營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">已付款 ${t.paid_orders} 筆</div></div>`}
-      <div class="tile"><div class="label">訂單數</div><div class="value">${t.orders}</div><div class="sub">另有取消 ${t.cancelled} 筆</div></div>
+      <div class="tile"><div class="label">訂單數</div><div class="value">${t.orders}</div><div class="sub">另有取消 ${t.cancelled} 筆${t.cancel_retained ? `（保留訂金 ${money(t.cancel_retained)}）` : ''}</div></div>
       <div class="tile"><div class="label">平均客單價</div><div class="value">${money(r.basis === 'order' ? t.avg_booked : t.avg_order)}</div><div class="sub">&nbsp;</div></div>
       <div class="tile"><div class="label">已收款</div><div class="value">${money(t.collected)}</div><div class="sub">含訂金</div></div>
       <div class="tile"><div class="label">待收款</div><div class="value">${money(t.receivable)}</div><div class="sub">${t.receivable_orders} 筆待付款</div></div>

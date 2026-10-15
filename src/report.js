@@ -2,7 +2,7 @@ import { bucketKey, listBuckets, resolveGranularity } from './buckets.js';
 import { SERVICE_TYPES } from './db.js';
 
 // 營收報表：以用車日（沒有用車日則用下單日）歸屬期間。
-// 營業額＝已付款／已派車／已完成的訂單金額；待收款＝待付款訂單金額；取消的訂單不計。
+// 營業額＝已付款／已派車／已完成的訂單金額＋取消後保留的訂金（取消費）；待收款＝待付款訂單還沒收的金額；取消的訂單本身不計。
 // 回頭客＝期間內有訂單、且在期間開始前就有過訂單的客人。
 
 const PAID = "('paid','shipped','completed')";
@@ -40,6 +40,14 @@ export function buildReport(store, { from, to, brandId = null, brandIds = null, 
   );
   totals.cancelled = store.get(`SELECT COUNT(*) AS n FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.status = 'cancelled' AND ${DAY} BETWEEN ? AND ?${bWhere}`, ...args).n;
   totals.avg_order = totals.paid_orders ? Math.round(totals.revenue / totals.paid_orders) : 0;
+  // 取消但保留的訂金（收款減掉退款），計入營業額、已收款、接單金額
+  const retainedBase = `FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.status = 'cancelled' AND ${DAY} BETWEEN ? AND ?${bWhere}`;
+  const RETAINED = `COALESCE(SUM(MAX(0, ${PAIDSUM})), 0)`;
+  totals.cancel_retained = store.get(`SELECT ${RETAINED} AS n ${retainedBase}`, ...args).n;
+  totals.cancel_retained_orders = store.get(`SELECT COUNT(*) AS n ${retainedBase} AND ${PAIDSUM} > 0`, ...args).n;
+  totals.revenue += totals.cancel_retained;
+  totals.collected += totals.cancel_retained;
+  totals.booked += totals.cancel_retained;
   // 期間前就有訂單的客人（不分品牌篩選：同一品牌內的客戶資料本來就是分開的）
   const PDAY = DAY.replace(/\bo\./g, 'p.');
   totals.avg_booked = totals.orders ? Math.round(totals.booked / totals.orders) : 0;
@@ -59,6 +67,17 @@ export function buildReport(store, { from, to, brandId = null, brandIds = null, 
      ${base} GROUP BY c.brand_id ORDER BY ${basis === 'order' ? 'booked' : 'revenue'} DESC`,
     from, ...args,
   );
+
+  for (const r of store.all(`SELECT c.brand_id, ${RETAINED} AS retained ${retainedBase} GROUP BY c.brand_id`, ...args)) {
+    if (!r.retained) continue;
+    let b = byBrand.find((x) => x.brand_id === r.brand_id);
+    if (!b) byBrand.push(b = { brand_id: r.brand_id, orders: 0, revenue: 0, receivable: 0, collected: 0, customers: 0, booked: 0, repeat_customers: 0 });
+    b.revenue += r.retained;
+    b.collected += r.retained;
+    b.booked += r.retained;
+    b.cancel_retained = r.retained;
+  }
+  byBrand.sort((a, b) => (basis === 'order' ? b.booked - a.booked : b.revenue - a.revenue));
 
   const byService = store.all(
     `SELECT o.service_type, COUNT(*) AS orders, COALESCE(SUM(CASE WHEN o.status IN ${PAID} THEN o.amount END), 0) AS revenue, ${BOOKED} AS booked
@@ -88,6 +107,15 @@ export function buildReport(store, { from, to, brandId = null, brandIds = null, 
     x.orders += r.orders;
     x.revenue += r.revenue;
     x.booked += r.booked;
+  }
+  for (const r of store.all(`SELECT ${DAY} AS day, c.brand_id, ${RETAINED} AS retained ${retainedBase} GROUP BY day, c.brand_id`, ...args)) {
+    const b = byKey.get(bucketKey(r.day, g));
+    if (!b || !r.retained) continue;
+    b.revenue += r.retained;
+    b.booked += r.retained;
+    const x = (b.brands[r.brand_id] ||= { orders: 0, revenue: 0, booked: 0 });
+    x.revenue += r.retained;
+    x.booked += r.retained;
   }
 
   return { from, to, basis, granularity: g, totals, byBrand, byService, topCustomers, series };
