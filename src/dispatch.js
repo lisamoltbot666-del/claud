@@ -1,4 +1,5 @@
 import { ORDER_STATUSES, SERVICE_TYPES } from './db.js';
+import { balanceOf } from './payments.js';
 
 // 司機與派車：司機名單（各品牌共用）、訂單指派司機、產生派車單文字（可複製或用 LINE 傳給司機）、
 // 以及傳給客人的「司機資訊」。司機若在後台連結到某品牌官方帳號的 LINE 好友，就能直接推播派車單。
@@ -67,7 +68,11 @@ export function dispatchText(store, orderId) {
   const c = store.getCustomer(o.customer_id);
   const brand = store.getBrand(c.brand_id);
   const d = o.driver_id ? getDriver(store, o.driver_id) : null;
-  const payment = o.status === 'pending_payment' ? `⚠️ 尚未付款（NT$${o.amount.toLocaleString('en-US')}），請確認是否現場收款` : `已付款 NT$${o.amount.toLocaleString('en-US')}`;
+  const fmt = (n) => `NT$${n.toLocaleString('en-US')}`;
+  const { paid, due } = balanceOf(o);
+  const payment = o.status !== 'pending_payment' ? `已付款 ${fmt(o.amount)}`
+    : paid > 0 ? `⚠️ 已收訂金 ${fmt(paid)}，尾款 ${fmt(due)} 請現場收款`
+      : `⚠️ 尚未付款（${fmt(o.amount)}），請確認是否現場收款`;
   return [
     `【派車單】${brand?.name || ''} #${o.id}`,
     d ? `司機：${d.name}${d.plate ? `｜${d.plate}` : ''}` : '',

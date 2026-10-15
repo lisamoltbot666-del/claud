@@ -155,6 +155,20 @@ CREATE TABLE IF NOT EXISTS drivers (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- 收款紀錄：一張訂單可以分多次收（訂金、尾款…）
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  amount INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'deposit',   -- deposit 訂金 | balance 尾款 | full 全額 | other 其他
+  method TEXT NOT NULL DEFAULT 'transfer', -- transfer 匯款 | cash_driver 現金交司機 | cash 現金 | card 刷卡 | other 其他
+  paid_on TEXT NOT NULL,                   -- 收款日 YYYY-MM-DD
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+
 -- 每月營收目標（各品牌；沒設定的月份沿用最近一次）
 CREATE TABLE IF NOT EXISTS revenue_targets (
   brand_id INTEGER NOT NULL REFERENCES brands(id) ON DELETE CASCADE,
@@ -448,7 +462,7 @@ export class Store {
 
   // ---------- orders ----------
   getOrder(id) {
-    return this.get('SELECT * FROM orders WHERE id = ?', id);
+    return this.get('SELECT o.*, (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.order_id = o.id) AS paid_amount FROM orders o WHERE o.id = ?', id);
   }
 
   createOrder(customerId, fields) {
@@ -495,7 +509,7 @@ export class Store {
     if (status) { where.push('o.status = ?'); params.push(status); }
     if (customerId) { where.push('o.customer_id = ?'); params.push(customerId); }
     return this.all(
-      `SELECT o.*, c.display_name, c.real_name, c.line_user_id, c.brand_id,
+      `SELECT o.*, c.display_name, c.real_name, c.line_user_id, c.brand_id, (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.order_id = o.id) AS paid_amount,
          COALESCE(o.driver_name_snap, d.name) AS driver_name, COALESCE(o.driver_plate_snap, d.plate) AS driver_plate,
          COALESCE(o.driver_car_snap, d.car_model) AS driver_car, COALESCE(o.driver_phone_snap, d.phone) AS driver_phone
        FROM orders o JOIN customers c ON c.id = o.customer_id LEFT JOIN drivers d ON d.id = o.driver_id

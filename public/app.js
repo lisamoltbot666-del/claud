@@ -19,6 +19,8 @@ const lastService = (st) => [SERVICES[st.lastOrder?.service_type], st.lastItems]
 const tripWhen = (o) => [o.service_date, o.service_time].filter(Boolean).join(' ');
 const tripRoute = (o) => [o.flight_no ? `✈ ${o.flight_no}` : '', [o.pickup, o.dropoff].filter(Boolean).join(' → '), o.return_date ? `至 ${o.return_date}` : ''].filter(Boolean).map(esc).join('｜');
 let STATUSES = {};
+let PAY_KINDS = {};
+let PAY_METHODS = {};
 let ME = {};
 let ROLES = {};
 let SERVICES = {};
@@ -71,6 +73,8 @@ function showTab(tab) {
 async function loadStatus() {
   const s = await api('/api/status');
   STATUSES = s.orderStatuses;
+  PAY_KINDS = s.paymentKinds || {};
+  PAY_METHODS = s.paymentMethods || {};
   SERVICES = s.serviceTypes;
   TODAY = s.today;
   BRANDS = s.brands;
@@ -167,7 +171,7 @@ async function loadSearch() {
     <td>#${o.id}</td><td>${esc(tripWhen(o) || o.order_date)}</td><td>${brandTag(o.brand_id)}${hl(o.real_name || o.display_name, q)}<div class="muted">${hl(o.phone, q)}</div></td>
     <td>${esc(SERVICES[o.service_type] || '')}<div class="muted">${hl(o.items, q)}</div></td>
     <td class="muted">${o.flight_no ? `✈ ${hl(o.flight_no, q)}｜` : ''}${hl([o.pickup, o.dropoff].filter(Boolean).join(' → '), q)}${o.note ? `<div>${hl(o.note, q)}</div>` : ''}</td>
-    <td>${money(o.amount)}</td><td>${esc(STATUSES[o.status] || o.status)}</td></tr>`).join('');
+    <td>${amountCell(o)}</td><td>${esc(STATUSES[o.status] || o.status)}</td></tr>`).join('');
   const msgRows = r.messages.map((m) => `<tr class="clickable" data-open="${m.customer_id}">
     <td>${fmtTime(m.created_at)}</td><td>${brandTag(m.brand_id)}${esc(m.real_name || m.display_name)}</td><td>${m.direction === 'in' ? '客人' : '我方'}</td><td>${hl(m.text, q)}</td></tr>`).join('');
   const total = r.customers.length + r.orders.length + r.messages.length;
@@ -255,7 +259,7 @@ async function loadOrders() {
   $('#order-table').innerHTML = `<thead><tr><th>#</th><th>用車</th><th>客戶</th><th>服務</th><th>行程</th><th>司機</th><th>金額</th><th>狀態</th><th>匯款期限</th><th>匯款回報</th></tr></thead>
   <tbody>${rows.length ? rows.map((o) => `<tr class="clickable" data-open="${o.customer_id}">
     <td>${o.id}</td><td>${esc(tripWhen(o)) || `<span class="muted">下單 ${esc(o.order_date)}</span>`}</td><td>${brandTag(o.brand_id)}${esc(o.real_name || o.display_name)}</td>
-    <td>${esc(SERVICES[o.service_type] || '')}<div class="muted">${esc(o.items)}</div></td><td class="muted">${tripRoute(o)}</td><td>${esc(o.driver_name || '')}</td><td>${money(o.amount)}</td>
+    <td>${esc(SERVICES[o.service_type] || '')}<div class="muted">${esc(o.items)}</div></td><td class="muted">${tripRoute(o)}</td><td>${esc(o.driver_name || '')}</td><td>${amountCell(o)}</td>
     <td>${esc(STATUSES[o.status])}</td><td>${o.status === 'pending_payment' ? esc(o.payment_due_date || '') : ''}</td><td>${esc(o.payment_report || '')}</td>
   </tr>`).join('') : '<tr><td colspan="10" class="empty">沒有訂單</td></tr>'}</tbody>`;
 }
@@ -340,12 +344,13 @@ async function openCustomer(id, compose = null) {
       <thead><tr><th>#</th><th>用車</th><th>服務 / 行程</th><th>金額</th><th>狀態</th><th>匯款期限 / 回報</th><th></th></tr></thead>
       <tbody>${orders.map((o) => `<tr>
         <td>${o.id}</td><td>${esc(tripWhen(o)) || '—'}<div class="muted">下單 ${esc(o.order_date)}</div></td>
-        <td>${esc([SERVICES[o.service_type], o.items].filter(Boolean).join(' '))}<div class="muted">${tripRoute(o)}</div>${o.driver_name ? `<div>🚘 ${esc(o.driver_name)}${o.driver_plate ? `｜${esc(o.driver_plate)}` : ''}${o.driver_car ? `｜${esc(o.driver_car)}` : ''}</div>` : ''}</td><td>${money(o.amount)}</td>
+        <td>${esc([SERVICES[o.service_type], o.items].filter(Boolean).join(' '))}<div class="muted">${tripRoute(o)}</div>${o.driver_name ? `<div>🚘 ${esc(o.driver_name)}${o.driver_plate ? `｜${esc(o.driver_plate)}` : ''}${o.driver_car ? `｜${esc(o.driver_car)}` : ''}</div>` : ''}</td><td>${amountCell(o)}</td>
         <td><select data-order-status="${o.id}">${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}" ${k === o.status ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
         <td>${o.status === 'pending_payment' ? `${esc(o.payment_due_date || '')}${o.payment_report ? `<div class="muted">回報：${esc(o.payment_report)}</div>` : ''}` : `<span class="muted">${o.paid_at ? `入帳 ${fmtTime(o.paid_at)}` : ''}</span>`}</td>
-        <td>${o.status === 'pending_payment' ? `<button class="small" data-paid="${o.id}">確認入帳</button>` : ''} ${['cancelled', 'completed'].includes(o.status) ? '' : `<button class="small secondary" data-dispatch="${o.id}">派車</button> `}<button class="small secondary" data-edit-order="${o.id}">編輯</button> <button class="small secondary" data-del-order="${o.id}">刪除</button></td>
+        <td>${o.status === 'cancelled' ? '' : `<button class="small" data-pay-order="${o.id}">收款</button>`} ${o.status === 'pending_payment' ? `<button class="small secondary" data-paid="${o.id}" title="直接標記全額已入帳">確認入帳</button>` : ''} ${['cancelled', 'completed'].includes(o.status) ? '' : `<button class="small secondary" data-dispatch="${o.id}">派車</button> `}<button class="small secondary" data-edit-order="${o.id}">編輯</button> <button class="small secondary" data-del-order="${o.id}">刪除</button></td>
       </tr>`).join('') || '<tr><td colspan="7" class="empty">尚無訂單</td></tr>'}</tbody>
     </table></div>
+    <div id="payment-panel" class="card" hidden style="margin-top:8px"></div>
     <form id="order-form" class="grid order-form" style="margin-top:8px">
       <input type="hidden" name="id"><input type="hidden" name="source_message_id">
       <label>服務<select name="service_type"><option value="">—</option>${Object.entries(SERVICES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
@@ -451,6 +456,7 @@ async function openCustomer(id, compose = null) {
     toast(orderId ? '已更新訂單' : '已新增訂單'); openCustomer(id);
   }); };
   // 編輯：把訂單內容帶進下方表單（航班、時間異動時用）
+  document.querySelectorAll('[data-pay-order]').forEach((b) => b.onclick = () => guard(() => openPayments(Number(b.dataset.payOrder), id)));
   document.querySelectorAll('[data-edit-order]').forEach((b) => b.onclick = () => {
     const o = orders.find((x) => x.id === Number(b.dataset.editOrder));
     for (const el of orderForm.elements) if (el.name) el.value = o[el.name] ?? '';
@@ -527,6 +533,46 @@ async function applyTemplate(customerId, kind, orderId) {
   f.orderId.value = orderId || '';
   f.text.focus();
 }
+
+// 收款紀錄：訂金、尾款分開記
+async function openPayments(orderId, customerId) {
+  const { order: o, payments } = await api(`/api/orders/${orderId}/payments`);
+  const panel = $('#payment-panel');
+  const paid = payments.reduce((a, p) => a + p.amount, 0);
+  const due = Math.max(0, o.amount - paid);
+  const opt = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${v}</option>`).join('');
+  panel.hidden = false;
+  panel.innerHTML = `<div class="row"><strong>訂單 #${o.id} 收款紀錄</strong><span class="muted">金額 ${money(o.amount)}｜已收 ${money(paid)}｜${due ? `<span class="warn">尾款 ${money(due)}</span>` : '<span class="ok">已收齊</span>'}</span><span class="spacer"></span><button class="small secondary" id="pay-close">關閉</button></div>
+    ${payments.length ? `<div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>收款日</th><th>類型</th><th>金額</th><th>方式</th><th>備註</th><th></th></tr></thead><tbody>
+      ${payments.map((p) => `<tr><td>${esc(p.paid_on)}</td><td>${esc(PAY_KINDS[p.kind] || p.kind)}</td><td>${money(p.amount)}</td><td>${esc(PAY_METHODS[p.method] || p.method)}</td><td class="muted">${esc(p.note || '')}${p.created_by ? `<div>${esc(p.created_by)}</div>` : ''}</td><td><button class="small secondary" data-del-pay="${p.id}">刪除</button></td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted">還沒有收款紀錄。</p>'}
+    ${due || !payments.length ? `<form id="pay-form" class="grid order-form" style="margin-top:6px">
+      <label>金額<input name="amount" type="number" min="1" required value="${due || ''}"></label>
+      <label>類型<select name="kind">${opt(PAY_KINDS, paid > 0 ? 'balance' : 'deposit')}</select></label>
+      <label>方式<select name="method">${opt(PAY_METHODS, 'transfer')}</select></label>
+      <label>收款日<input name="paid_on" type="date" value="${TODAY}"></label>
+      <label class="wide">備註<input name="note" placeholder="如：末五碼 35751、司機代收"></label>
+      <div class="row" style="grid-column:1/-1"><button type="submit">記錄收款</button><span class="muted">收齊後訂單會自動變成「已付款」</span></div>
+    </form>` : ''}`;
+  panel.scrollIntoView({ block: 'center' });
+  $('#pay-close').onclick = () => { panel.hidden = true; };
+  if ($('#pay-form')) $('#pay-form').onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    const r = await api(`/api/orders/${orderId}/payments`, { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+    toast(r.order.status === 'paid' ? '已記錄收款，款項已收齊' : '已記錄收款');
+    await openCustomer(customerId);
+    await openPayments(orderId, customerId);
+  }); };
+  panel.querySelectorAll('[data-del-pay]').forEach((b) => b.onclick = () => guard(async () => {
+    if (!confirm('確定刪除這筆收款紀錄？')) return;
+    await api(`/api/payments/${b.dataset.delPay}`, { method: 'DELETE' });
+    toast('已刪除');
+    await openCustomer(customerId);
+    await openPayments(orderId, customerId);
+  }));
+}
+
+// 金額欄：有收訂金時顯示已收／尾款
+const amountCell = (o) => `${money(o.amount)}${o.status === 'pending_payment' && o.paid_amount > 0 ? `<div class="muted">已收 ${money(o.paid_amount)}</div><div class="warn">尾款 ${money(Math.max(0, o.amount - o.paid_amount))}</div>` : ''}`;
 
 async function markPaid(orderId) {
   if (!confirm(`確認訂單 #${orderId} 已入帳？`)) return;
@@ -1095,6 +1141,7 @@ async function loadReport() {
     : `<div class="tile"><div class="label">營業額</div><div class="value">${money(t.revenue)}</div><div class="sub">已付款 ${t.paid_orders} 筆</div></div>`}
       <div class="tile"><div class="label">訂單數</div><div class="value">${t.orders}</div><div class="sub">另有取消 ${t.cancelled} 筆</div></div>
       <div class="tile"><div class="label">平均客單價</div><div class="value">${money(r.basis === 'order' ? t.avg_booked : t.avg_order)}</div><div class="sub">&nbsp;</div></div>
+      <div class="tile"><div class="label">已收款</div><div class="value">${money(t.collected)}</div><div class="sub">含訂金</div></div>
       <div class="tile"><div class="label">待收款</div><div class="value">${money(t.receivable)}</div><div class="sub">${t.receivable_orders} 筆待付款</div></div>
       <div class="tile"><div class="label">客人數</div><div class="value">${t.customers}</div><div class="sub">新客 ${t.new_customers}・回頭客 ${t.repeat_customers}</div></div>
       <div class="tile"><div class="label">回頭客比例</div><div class="value">${pct(t.repeat_rate)}</div><div class="sub">之前也訂過的客人</div></div>

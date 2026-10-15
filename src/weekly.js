@@ -78,7 +78,7 @@ export function buildWeekly(store, config, { now = new Date(), brandIds = null }
   );
   // 所有逾期未付款（不限上週）
   const overdue = store.get(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(o.amount), 0) AS amount FROM orders o JOIN customers c ON c.id = o.customer_id
+    `SELECT COUNT(*) AS n, COALESCE(SUM(MAX(0, o.amount - (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.order_id = o.id))), 0) AS amount FROM orders o JOIN customers c ON c.id = o.customer_id
      WHERE o.status = 'pending_payment' AND o.payment_due_date IS NOT NULL AND o.payment_due_date < ?${bWhere}`,
     r.nextFrom, ...(ids || []),
   );
