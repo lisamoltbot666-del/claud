@@ -83,7 +83,9 @@ async function loadStatus() {
   updateExportLinks();
   $('#order-status').innerHTML = `<option value="">全部狀態</option>${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}`;
   const missing = BRANDS.filter((b) => !b.has_secret || !b.has_token).length;
-  const warn = !BRANDS.length ? '⚠ 尚未建立品牌｜' : missing ? `⚠ ${missing} 個品牌尚未設定 LINE 金鑰｜` : '';
+  const sigBad = BRANDS.filter((b) => b.webhook_status?.fail_count > 0).map((b) => b.name);
+  const warn = (!BRANDS.length ? '⚠ 尚未建立品牌｜' : missing ? `⚠ ${missing} 個品牌尚未設定 LINE 金鑰｜` : '')
+    + (sigBad.length ? `⚠ ${sigBad.join('、')} 收不到訊息（Webhook 簽章錯誤，請到「品牌」頁檢查）｜` : '');
   ME = s.me;
   ROLES = s.roles;
   document.body.classList.toggle('role-staff', ME.role !== 'admin');
@@ -591,6 +593,7 @@ async function loadBrands() {
     <div>
       <h2>${brandTag(b.id)} ${esc(b.name)}</h2>
       <div class="muted" style="margin-top:4px">Webhook URL：<code>${esc(origin)}/webhook/${esc(b.slug)}</code></div>
+      <div class="muted">${webhookBadge(b.webhook_status)}</div>
       ${b.forward_url ? `<div class="muted">同時轉送到：<code>${esc(b.forward_url)}</code> ${forwardBadge(b.forward_status)}</div>` : ''}
       <div class="muted">Channel secret：${b.has_secret ? '<span class="ok">已設定</span>' : '<span class="warn">未設定</span>'}｜Access token：${b.has_token ? `<span class="ok">已設定 ${esc(b.token_hint)}</span>` : '<span class="warn">未設定</span>'}${b.bank_info ? `｜匯款資訊：${esc(b.bank_info)}` : ''}</div>
     </div>
@@ -638,6 +641,20 @@ function brandFields(b = {}) {
     ${f('review_url', '評價連結（Google 評論等，會放進服務後的感謝訊息；可留空）', 'type="url" placeholder="https://g.page/r/…"').replace('<label>', '<label class="wide">')}
     ${f('rebook_offer', '回購優惠（會放進服務後 30 天的回購邀請，例如：回頭客再訂享 9 折；可留空）').replace('<label>', '<label class="wide">')}
     ${f('forward_url', '同時轉送到（原本填在 LINE 的 Webhook 網址，舊系統還要用才填；不用請留空）', 'type="url" placeholder="https://…"').replace('<label>', '<label class="wide">')}`;
+}
+
+// 最近收到 LINE 訊息的時間；簽章錯誤代表 Channel secret 不一致，訊息會被擋下
+function webhookBadge(st) {
+  if (!st?.last_at && !st?.fail_count) return '最近收到訊息：<span class="warn">⚠️ 還沒收到過 LINE 的任何訊息，請確認 LINE Developers 的 Webhook URL 與 Use webhook</span>';
+  const parts = [];
+  if (st.last_event_at) {
+    const days = (Date.now() - Date.parse(st.last_event_at)) / 86400000;
+    parts.push(`最近收到訊息：<span class="${days > 3 ? 'warn' : 'ok'}">${fmtTime(st.last_event_at)}</span>${days > 3 ? ` <span class="warn">（已 ${Math.floor(days)} 天沒有訊息，請確認 Webhook 設定）</span>` : ''}`);
+  } else if (st.last_at) {
+    parts.push(`最近收到訊息：<span class="muted">還沒有客人訊息（${fmtTime(st.last_at)} 收到 LINE 的連線測試）</span>`);
+  }
+  if (st.fail_count > 0) parts.push(`<span class="warn">⚠️ 簽章錯誤 ${st.fail_count} 次（最近 ${fmtTime(st.fail_at)}）：訊息被擋下，請確認這裡的 Channel secret 和 LINE Developers「Basic settings」的一致</span>`);
+  return parts.join('<br>');
 }
 
 function forwardBadge(st) {

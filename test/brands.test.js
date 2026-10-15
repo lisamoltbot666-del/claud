@@ -11,7 +11,7 @@ import { addDays, today } from '../src/dates.js';
 import { openDb } from '../src/db.js';
 import { buildFocusList, formatFocusSummary } from '../src/focus.js';
 import { ReminderService } from '../src/reminders.js';
-import { bootstrapBrandFromEnv, createApp, ensureInitialBrands } from '../src/server.js';
+import { bootstrapBrandFromEnv, createApp, ensureInitialBrands, webhookStatus } from '../src/server.js';
 
 const silent = { log() {}, warn() {}, error() {} };
 const T = today('Asia/Taipei');
@@ -151,8 +151,19 @@ test('HTTP：品牌管理、金鑰不外洩、各品牌 Webhook 用各自的 sec
 
   const payload = JSON.stringify({ events: [{ type: 'follow', source: { type: 'user', userId: 'U9' } }] });
   const sign = (secret) => crypto.createHmac('sha256', secret).update(payload).digest('base64');
+  assert.equal(webhookStatus(store, b.id), null, '還沒收過');
   assert.equal((await fetch(`${base}/webhook/beta`, { method: 'POST', body: payload, headers: { 'x-line-signature': sign('secA') } })).status, 401);
+  assert.equal((await fetch(`${base}/webhook/beta`, { method: 'POST', body: payload, headers: { 'x-line-signature': sign('secA') } })).status, 401);
+  assert.equal(webhookStatus(store, b.id).fail_count, 2, '簽章錯誤會記錄次數');
+  assert.equal((await call('/api/brands')).data.find((x) => x.id === b.id).webhook_status.fail_count, 2);
+  // LINE 的 Verify：events 是空的 → 算收到連線，但不算客人訊息
+  const verify = JSON.stringify({ events: [] });
+  await fetch(`${base}/webhook/beta`, { method: 'POST', body: verify, headers: { 'x-line-signature': crypto.createHmac('sha256', 'secB').update(verify).digest('base64') } });
+  assert.ok(webhookStatus(store, b.id).last_at);
+  assert.equal(webhookStatus(store, b.id).last_event_at, undefined);
+  assert.equal(webhookStatus(store, b.id).fail_count, 0, '成功後重新計算');
   assert.equal((await fetch(`${base}/webhook/beta`, { method: 'POST', body: payload, headers: { 'x-line-signature': sign('secB') } })).status, 200);
+  assert.ok(webhookStatus(store, b.id).last_event_at);
   await new Promise((r) => setTimeout(r, 30));
   assert.ok(store.getCustomerByLineId(b.id, 'U9'));
   assert.equal(store.getCustomerByLineId(a.id, 'U9'), undefined);

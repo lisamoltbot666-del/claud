@@ -80,6 +80,29 @@ const CUSTOMER_FIELD_LABELS = { display_name: 'LINE 名稱', real_name: '姓名'
 const ORDER_FIELD_LABELS = { items: '內容', amount: '金額', order_date: '下單日', payment_due_date: '匯款期限', payment_report: '匯款回報', note: '備註', service_type: '服務類型', service_date: '用車日', service_time: '用車時間', flight_no: '航班', pickup: '上車地點', dropoff: '目的地', return_date: '還車日' };
 
 // 後台看到的品牌資料：不回傳金鑰本身
+// 每個品牌的 Webhook 狀態：最近一次收到（含 LINE 的 Verify）、最近一次有訊息事件、簽章錯誤
+export function webhookStatus(store, brandId) {
+  try {
+    return JSON.parse(store.getKv(`webhook_status:${brandId}`) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+function recordWebhook(store, brandId, { ok, events = 0 }) {
+  const now = new Date().toISOString();
+  const st = webhookStatus(store, brandId) || { fail_count: 0 };
+  if (ok) {
+    st.last_at = now;
+    if (events) st.last_event_at = now;
+    st.fail_count = 0; // 成功一次就重新計算
+  } else {
+    st.fail_at = now;
+    st.fail_count = (st.fail_count || 0) + 1;
+  }
+  store.setKv(`webhook_status:${brandId}`, JSON.stringify(st));
+}
+
 function publicBrand(b, store) {
   const { channel_secret: secret, channel_access_token: token, ...rest } = b;
   return {
@@ -88,6 +111,7 @@ function publicBrand(b, store) {
     has_token: Boolean(token),
     token_hint: token && token.length >= 20 ? `…${token.slice(-4)}` : '',
     forward_status: store && b.forward_url ? forwardStatus(store, b.id) : null,
+    webhook_status: store ? webhookStatus(store, b.id) : null,
   };
 }
 
@@ -646,13 +670,18 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
         if (!brand) return send(res, 404, 'unknown brand');
         const raw = await readBody(req);
         const signature = req.headers['x-line-signature'];
-        if (!verifySignature(brand.channel_secret, raw, signature)) return send(res, 401, 'invalid signature');
+        if (!verifySignature(brand.channel_secret, raw, signature)) {
+          recordWebhook(store, brand.id, { ok: false });
+          logger.warn?.(`[${brand.name}] Webhook 簽章不符：請確認後台的 Channel secret 與 LINE Developers 上的一致`);
+          return send(res, 401, 'invalid signature');
+        }
         // 同時轉送一份給品牌原本使用的系統（不影響本系統處理）
         const forwarding = brand.forward_url && !req.headers[FORWARD_HEADER]
           ? forwardWebhook({ store, brand, raw, signature, fetchImpl, logger })
           : null;
         let body;
         try { body = JSON.parse(raw.toString('utf8')); } catch { send(res, 400, 'bad json'); await forwarding; return; }
+        recordWebhook(store, brand.id, { ok: true, events: (body.events || []).length });
         send(res, 200, 'ok'); // 先回 200 給 LINE，再慢慢處理
         await webhook.handle(brand, body);
         await forwarding;
