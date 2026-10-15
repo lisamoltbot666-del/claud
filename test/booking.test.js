@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
-import { latestBookingDraft, parseBookingForm, parseDate, parseTime, PAID_PATTERN } from '../src/booking-parse.js';
+import { latestBookingDraft, parseBookingForm, parseContact, parseDate, parseTime, parseTrips, PAID_PATTERN } from '../src/booking-parse.js';
 import { getConfig } from '../src/config.js';
 import { today } from '../src/dates.js';
 import { openDb } from '../src/db.js';
@@ -132,4 +132,43 @@ test('API：客戶資料附預約單、略過、建立訂單時只接受自己�
   } finally {
     server.close();
   }
+});
+
+test('一句話寫的來回包車行程＋另外傳的聯絡人、統編、付款需求', async () => {
+  const { store, brand, say } = setup();
+  await say('U5', '有確定喽~我要來回包車，7位成人\n\n11/22(日)上午7:50從 高雄市苓雅區義勇路149號 出發，前往台南市大學路1號成功大學自強校區大門\n\n11/22(日)下午5:10從 台南市大學路1號成功大學自強校區大門\n出發 前往 高雄市苓雅區義勇路149號');
+  await say('U5', '我需要開立統編發票\n統編：92075581\n抬頭：財團法人高雄市私立聖淵啟仁中心');
+  await say('U5', '請問是否可以用匯款的方式呢?\n因公司作帳及出款需要作業時間，10/23前提供發票及明細，會於11/5匯款');
+  await say('U5', '聯絡人：陳佳萱\n連絡電話：0975098102');
+  const c = store.getCustomerByLineId(brand.id, 'U5');
+  assert.equal(c.real_name, '陳佳萱', '「連絡電話」這種寫法也認得');
+  assert.equal(c.phone, '0975098102');
+  assert.equal(c.tax_id, '92075581');
+  assert.equal(c.invoice_title, '財團法人高雄市私立聖淵啟仁中心');
+
+  const d = latestBookingDraft(store, c.id, '2026-10-15');
+  const f = d.fields;
+  assert.equal(f.service_type, 'charter');
+  assert.equal(f.service_date, '2026-11-22');
+  assert.equal(f.service_time, '07:50');
+  assert.equal(f.pickup, '高雄市苓雅區義勇路149號');
+  assert.equal(f.dropoff, '台南市大學路1號成功大學自強校區大門');
+  assert.equal(f.passengers, 7);
+  assert.match(f.note, /回程 11\/22 17:10 台南市大學路1號成功大學自強校區大門 → 高雄市苓雅區義勇路149號/);
+  assert.equal(f.tax_id, '92075581');
+  assert.ok(f.needs.some((n) => n.includes('11/5匯款')), '付款條件列為需求');
+  assert.ok(!f.needs.some((n) => n.startsWith('統編：')), '統編不重複列');
+  assert.ok(buildFocusList(store, config).items.find((i) => i.customer.id === c.id).reasons.some((r) => r.code === 'booking_form'));
+
+  // 付款條件那句不會被當成行程
+  assert.deepEqual(parseTrips('10/23前提供發票及明細，會於11/5匯款', '2026-10-15'), []);
+  // 不同天的回程 → 結束日
+  const legs = parseTrips('12/1 早上9點從台北車站出發到桃園機場，12/5 晚上8點從桃園機場到台北車站', '2026-10-15');
+  assert.deepEqual(legs.map((l) => [l.date, l.time, l.from, l.to]), [['2026-12-01', '09:00', '台北車站', '桃園機場'], ['2026-12-05', '20:00', '桃園機場', '台北車站']]);
+});
+
+test('聯絡資料辨識：各種寫法', () => {
+  assert.deepEqual(parseContact('姓名: 王小明\n手機：0912 345 678'), { real_name: '王小明', phone: '0912 345 678' });
+  assert.deepEqual(parseContact('請開統一編號 12345678 的發票'), { tax_id: '12345678' });
+  assert.deepEqual(parseContact('我明天到'), {});
 });

@@ -1,4 +1,4 @@
-import { PAID_PATTERN, parseBookingForm } from './booking-parse.js';
+import { PAID_PATTERN, parseBookingForm, parseContact } from './booking-parse.js';
 import { today } from './dates.js';
 import { ORDER_STATUSES, SERVICE_TYPES } from './db.js';
 
@@ -77,15 +77,12 @@ export class WebhookHandler {
     const text = msg.type === 'text' ? msg.text : NON_TEXT_LABELS[msg.type] || `[${msg.type}]`;
     this.store.addMessage(customer.id, 'in', text, msg.type || 'text');
 
-    // 預約單：姓名、電話自動填進客戶資料（只填空白欄位，不覆蓋客服填過的）
+    // 預約單、聯絡資料：姓名、電話、統編、發票抬頭自動填進客戶資料（只填空白欄位，不覆蓋客服填過的）
     if (msg.type === 'text') {
-      const form = parseBookingForm(msg.text, today(this.tz));
-      if (form) {
-        const fill = {};
-        if (form.real_name && !customer.real_name) fill.real_name = form.real_name;
-        if (form.phone && !customer.phone) fill.phone = form.phone;
-        if (Object.keys(fill).length) this.store.updateCustomer(customer.id, fill);
-      }
+      const found = { ...parseContact(msg.text), ...Object.fromEntries(Object.entries(parseBookingForm(msg.text, today(this.tz)) || {}).filter(([k, v]) => ['real_name', 'phone'].includes(k) && v)) };
+      const fill = {};
+      for (const k of ['real_name', 'phone', 'tax_id', 'invoice_title']) if (found[k] && !customer[k]) fill[k] = found[k];
+      if (Object.keys(fill).length) this.store.updateCustomer(customer.id, fill);
     }
 
     const pending = this.store.latestPendingOrder(customer.id);

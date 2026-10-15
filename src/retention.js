@@ -46,7 +46,7 @@ export function anonymize(store, ids) {
   try {
     for (const id of ids) {
       store.run(`UPDATE customers SET display_name = ?, picture_url = NULL, status_message = NULL, real_name = NULL, phone = NULL, email = NULL,
-        birthday = NULL, gender = NULL, address = NULL, tags = NULL, note = NULL, line_user_id = NULL, is_friend = 0, next_contact_date = NULL,
+        birthday = NULL, gender = NULL, address = NULL, tax_id = NULL, invoice_title = NULL, tags = NULL, note = NULL, line_user_id = NULL, is_friend = 0, next_contact_date = NULL,
         lead_lost_note = NULL, anonymized_at = ?, updated_at = ? WHERE id = ?`, ANON_NAME, now, now, id);
       store.run('UPDATE orders SET flight_no = NULL, pickup = NULL, dropoff = NULL, payment_report = NULL, note = NULL WHERE customer_id = ?', id);
       store.run('DELETE FROM messages WHERE customer_id = ?', id);

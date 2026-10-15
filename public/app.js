@@ -284,10 +284,11 @@ async function openCustomer(id, compose = null) {
 
     ${booking ? (() => {
       const f = booking.fields;
-      const rows = [['服務', SERVICES[f.service_type]], ['日期', f.service_date], ['時間', f.service_time], ['航班', f.flight_no], ['上車', f.pickup], ['下車', f.dropoff], ['車型', f.items], ['姓名', f.real_name], ['電話', f.phone], ['備註', f.note]].filter(([, v]) => v);
+      const rows = [['服務', SERVICES[f.service_type]], ['日期', f.service_date], ['時間', f.service_time], ['航班', f.flight_no], ['上車', f.pickup], ['下車', f.dropoff], ['結束日', f.return_date], ['車型', f.items], ['姓名', f.real_name], ['電話', f.phone], ['備註', f.note], ['統編', [f.tax_id, f.invoice_title].filter(Boolean).join(' ')]].filter(([, v]) => v);
       return `<div class="card" id="booking-card" style="margin-top:12px;border-left:4px solid var(--brand)">
         <strong>📋 偵測到預約單</strong> <span class="muted">${fmtTime(booking.at)} 客人傳來</span>
         <div class="booking-fields">${rows.map(([k, v]) => `<span class="muted">${k}</span><span>${esc(v)}</span>`).join('')}</div>
+        ${f.needs?.length ? `<div style="margin-top:6px"><span class="muted">⚠️ 客人提到的需求：</span><ul style="margin:4px 0 0;padding-left:20px">${f.needs.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
         <div class="row" style="margin-top:8px"><button class="small" id="booking-fill">帶入訂單</button><button class="small secondary" id="booking-dismiss">略過</button>
         <span class="muted">帶入後請確認內容、填上金額再按「新增訂單」</span></div></div>`;
     })() : ''}
@@ -324,6 +325,7 @@ async function openCustomer(id, compose = null) {
       ${field('email', 'Email', 'email')}${field('birthday', '生日', 'date')}
       <label>性別<select name="gender">${['', '女', '男', '其他'].map((g) => `<option value="${g}" ${g === (c.gender || '') ? 'selected' : ''}>${g || '—'}</option>`).join('')}</select></label>
       ${field('tags', '標籤（逗號分隔，如 VIP,團購）')}${field('reorder_days', '回訪週期（天，空白自動推算）', 'number')}${field('next_contact_date', '下次聯絡日', 'date')}
+      ${field('tax_id', '統一編號')}${field('invoice_title', '發票抬頭', 'text')}
       ${field('address', '地址', 'text', true)}${field('note', '備註（喜好、注意事項…）', 'textarea', true)}
       <div class="row wide" style="grid-column:1/-1"><button type="submit">儲存資料</button><span class="spacer"></span><button type="button" class="danger small admin-only" id="delete-customer">刪除客戶</button></div>
     </form>
@@ -462,15 +464,15 @@ async function openCustomer(id, compose = null) {
       const f = booking.fields;
       // 客戶資料空白的姓名、電話一併補上
       const fill = {};
-      if (f.real_name && !c.real_name) fill.real_name = f.real_name;
-      if (f.phone && !c.phone) fill.phone = f.phone;
+      for (const k of ['real_name', 'phone', 'tax_id', 'invoice_title']) if (f[k] && !c[k]) fill[k] = f[k];
       if (Object.keys(fill).length) {
         await api(`/api/customers/${id}`, { method: 'PATCH', body: fill });
         for (const [k, v] of Object.entries(fill)) { const el = $('#customer-form').elements[k]; if (el) el.value = v; }
       }
-      for (const k of ['service_type', 'service_date', 'service_time', 'flight_no', 'pickup', 'dropoff', 'return_date', 'items', 'note']) {
+      for (const k of ['service_type', 'service_date', 'service_time', 'flight_no', 'pickup', 'dropoff', 'return_date', 'items']) {
         if (f[k] && orderForm.elements[k]) orderForm.elements[k].value = f[k];
       }
+      orderForm.elements.note.value = [f.note, f.tax_id ? `需開統編發票 ${f.tax_id}${f.invoice_title ? ` ${f.invoice_title}` : ''}` : '', ...(f.needs || []).filter((n) => !/統編|抬頭/.test(n))].filter(Boolean).join('；');
       orderForm.elements.source_message_id.value = booking.message_id;
       orderForm.elements.status.value = 'pending_payment';
       orderForm.scrollIntoView({ block: 'center' });
