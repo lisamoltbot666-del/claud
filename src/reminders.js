@@ -23,7 +23,9 @@ export const templates = {
   payment(c, o, cfg) {
     return [
       `${nameOf(c)} 您好，這裡是${cfg.shopName} 😊`,
-      `提醒您訂單 #${o.id}${o.items ? `（${o.items}）` : ''} 金額 NT$${o.amount}，匯款期限為 ${o.payment_due_date || '近日'}。`,
+      o.paid_amount > 0 && o.paid_amount < o.amount
+        ? `提醒您訂單 #${o.id}${o.items ? `（${o.items}）` : ''} 已收到訂金 NT$${o.paid_amount}，尾款 NT$${o.amount - o.paid_amount}，匯款期限為 ${o.payment_due_date || '近日'}。`
+        : `提醒您訂單 #${o.id}${o.items ? `（${o.items}）` : ''} 金額 NT$${o.amount}，匯款期限為 ${o.payment_due_date || '近日'}。`,
       cfg.bankInfo ? `匯款資訊：${cfg.bankInfo}` : '',
       '完成匯款後，請回覆「已匯款 帳號末五碼」，我們會盡快為您確認，謝謝！',
     ].filter(Boolean).join('\n');

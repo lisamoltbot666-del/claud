@@ -17,6 +17,7 @@ import { LOST_REASONS, buildFunnel, leadInfo, markLost, reopenLead } from './lea
 import { buildReport } from './report.js';
 import { buildWeekly } from './weekly.js';
 import { latestBookingDraft } from './booking-parse.js';
+import { PAYMENT_KINDS, PAYMENT_METHODS, addPayment, balanceOf, deletePayment, listPayments } from './payments.js';
 import { buildResponse } from './response.js';
 import { buildTargets, setTarget } from './targets.js';
 import { buildDriverStats } from './driverstats.js';
@@ -186,6 +187,8 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       lastDailyRun: store.getKv('daily_last_run'),
       today: today(config.tz),
       orderStatuses: ORDER_STATUSES,
+      paymentKinds: PAYMENT_KINDS,
+      paymentMethods: PAYMENT_METHODS,
       serviceTypes: SERVICE_TYPES,
     })],
     ['GET', /^\/api\/brands$/, () => store.listBrands().map((b) => publicBrand(b, store))],
@@ -338,6 +341,23 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
       }));
       log(req, '新增訂單', { customerId: c.id, orderId: o.id, detail: `#${o.id} ${[o.service_date, SERVICE_TYPES[o.service_type]].filter(Boolean).join(' ')} NT$${o.amount}` });
       return o;
+    }],
+    // ---------- 收款紀錄（訂金、尾款…）----------
+    ['GET', /^\/api\/orders\/(\d+)\/payments$/, ([, id]) => {
+      const o = store.getOrder(toId(id));
+      if (!o) throw new HttpError(404, '找不到訂單');
+      return { order: o, payments: listPayments(store, o.id), kinds: PAYMENT_KINDS, methods: PAYMENT_METHODS };
+    }],
+    ['POST', /^\/api\/orders\/(\d+)\/payments$/, ([, id], body, _u, req) => {
+      const o = badRequest(() => addPayment(store, config, toId(id), body, req.user.display_name));
+      const p = listPayments(store, o.id).at(-1);
+      log(req, '記錄收款', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id} ${PAYMENT_KINDS[p.kind]} NT$${p.amount}（${PAYMENT_METHODS[p.method]}）` });
+      return { order: o, payments: listPayments(store, o.id) };
+    }],
+    ['DELETE', /^\/api\/payments\/(\d+)$/, ([, id], _b, _u, req) => {
+      const { payment: p, order: o } = badRequest(() => deletePayment(store, toId(id)));
+      log(req, '刪除收款紀錄', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id} ${PAYMENT_KINDS[p.kind]} NT$${p.amount}` });
+      return { order: o, payments: listPayments(store, o.id) };
     }],
     ['PATCH', /^\/api\/orders\/(\d+)$/, async ([, id], body, _u, req) => {
       const before = mustOrder(toId(id));
@@ -608,11 +628,11 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
 
   function exportOrdersCsv(brandId) {
     const nameOfBrand = brandName();
-    const rows = store.listOrders({ brandId }).map((o) => ({ ...o, brand: nameOfBrand(o.brand_id), customer_name: o.real_name || o.display_name, status_label: ORDER_STATUSES[o.status], service_label: SERVICE_TYPES[o.service_type] || '' }));
+    const rows = store.listOrders({ brandId }).map((o) => ({ ...o, collected: balanceOf(o).paid, due: balanceOf(o).due, brand: nameOfBrand(o.brand_id), customer_name: o.real_name || o.display_name, status_label: ORDER_STATUSES[o.status], service_label: SERVICE_TYPES[o.service_type] || '' }));
     return toCsv([
       ['id', '訂單編號'], ['brand', '品牌'], ['order_date', '下單日'], ['customer_id', '客戶編號'], ['customer_name', '客戶'], ['service_label', '服務'],
       ['service_date', '用車日'], ['service_time', '時間'], ['flight_no', '航班'], ['pickup', '上車／取車地點'], ['dropoff', '目的地／還車地點'], ['return_date', '結束／還車日'],
-      ['items', '內容'], ['amount', '金額'], ['status_label', '狀態'], ['payment_due_date', '匯款期限'], ['payment_report', '匯款回報'], ['paid_at', '入帳時間'], ['note', '備註'],
+      ['items', '內容'], ['amount', '金額'], ['collected', '已收'], ['due', '未收'], ['status_label', '狀態'], ['payment_due_date', '匯款期限'], ['payment_report', '匯款回報'], ['paid_at', '入帳時間'], ['note', '備註'],
     ], rows);
   }
 

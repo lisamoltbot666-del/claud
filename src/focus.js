@@ -2,6 +2,7 @@ import { addDays, dateOf, diffDays, formatDateTime, today } from './dates.js';
 import { SERVICE_TYPES } from './db.js';
 import { PAID_PATTERN, latestBookingDraft } from './booking-parse.js';
 import { leadsToFollowUp } from './leads.js';
+import { balanceOf } from './payments.js';
 import { customerStats } from './profile.js';
 
 // 產生「今日關懷清單」：哪些客戶今天需要客服特別關心、為什麼、建議做什麼
@@ -49,7 +50,7 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
   const staff = store.internalIds();
   const customers = (brandId ? store.all('SELECT * FROM customers WHERE brand_id = ?', brandId) : store.all('SELECT * FROM customers'))
     .filter((c) => !staff.has(c.id) && !c.anonymized_at);
-  const orders = store.all("SELECT * FROM orders WHERE status != 'cancelled' ORDER BY order_date, id");
+  const orders = store.all("SELECT o.*, (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.order_id = o.id) AS paid_amount FROM orders o WHERE o.status != 'cancelled' ORDER BY o.order_date, o.id");
   const ordersByCustomer = new Map();
   for (const o of orders) {
     if (!ordersByCustomer.has(o.customer_id)) ordersByCustomer.set(o.customer_id, []);
@@ -83,19 +84,21 @@ export function buildFocusList(store, config, now = new Date(), { brandId = null
     const pending = list.filter((o) => o.status === 'pending_payment');
 
     for (const o of pending) {
+      const due = balanceOf(o).due;
+      const amt = o.paid_amount > 0 ? `尾款 NT$${due}（已收 NT$${o.paid_amount}）` : `NT$${o.amount}`;
       const lastRem = store.lastReminder(c.id, 'payment', o.id);
       const reminded = lastRem ? { lastRemindedAt: lastRem.sent_at, remindCount: store.countReminders(o.id, 'payment') } : {};
       if (o.payment_report) {
-        reasons.push({ code: 'verify_payment', priority: 1, orderId: o.id, label: '客戶已回報匯款，請核對入帳', detail: `訂單 #${o.id} NT$${o.amount}，回報內容：${o.payment_report}`, action: 'verify' });
+        reasons.push({ code: 'verify_payment', priority: 1, orderId: o.id, label: '客戶已回報匯款，請核對入帳', detail: `訂單 #${o.id} ${amt}，回報內容：${o.payment_report}`, action: 'verify' });
         continue;
       }
       if (!o.payment_due_date) continue;
       if (o.payment_due_date < t) {
-        reasons.push({ code: 'payment_overdue', priority: 1, orderId: o.id, label: `匯款已逾期 ${diffDays(t, o.payment_due_date)} 天`, detail: `訂單 #${o.id} NT$${o.amount}，期限 ${o.payment_due_date}`, action: 'payment', ...reminded });
+        reasons.push({ code: 'payment_overdue', priority: 1, orderId: o.id, label: `匯款已逾期 ${diffDays(t, o.payment_due_date)} 天`, detail: `訂單 #${o.id} ${amt}，期限 ${o.payment_due_date}`, action: 'payment', ...reminded });
       } else if (o.payment_due_date === t) {
-        reasons.push({ code: 'payment_due_today', priority: 1, orderId: o.id, label: '今天是匯款期限', detail: `訂單 #${o.id} NT$${o.amount}`, action: 'payment', ...reminded });
+        reasons.push({ code: 'payment_due_today', priority: 1, orderId: o.id, label: '今天是匯款期限', detail: `訂單 #${o.id} ${amt}`, action: 'payment', ...reminded });
       } else if (o.payment_due_date === tomorrow) {
-        reasons.push({ code: 'payment_due_tomorrow', priority: 2, orderId: o.id, label: '明天匯款到期', detail: `訂單 #${o.id} NT$${o.amount}`, action: 'payment', ...reminded });
+        reasons.push({ code: 'payment_due_tomorrow', priority: 2, orderId: o.id, label: '明天匯款到期', detail: `訂單 #${o.id} ${amt}`, action: 'payment', ...reminded });
       }
     }
 

@@ -10,6 +10,10 @@ const PAID = "('paid','shipped','completed')";
 const DAY_EXPR = { service: 'COALESCE(o.service_date, o.order_date)', order: 'o.order_date' };
 // 接單金額＝所有未取消訂單的金額（含待付款）
 const BOOKED = 'COALESCE(SUM(o.amount), 0)';
+// 已收：已付款類狀態視為收齊；待付款的訂單看收款紀錄（訂金）
+const PAIDSUM = '(SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.order_id = o.id)';
+const COLLECTED = `COALESCE(SUM(CASE WHEN o.status IN ${PAID} THEN o.amount WHEN o.status = 'pending_payment' THEN MIN(o.amount, ${PAIDSUM}) END), 0)`;
+const DUE = `COALESCE(SUM(CASE WHEN o.status = 'pending_payment' THEN MAX(0, o.amount - ${PAIDSUM}) END), 0)`;
 
 export function buildReport(store, { from, to, brandId = null, brandIds = null, granularity = 'auto', basis = 'service' }) {
   basis = basis === 'order' ? 'order' : 'service';
@@ -27,7 +31,8 @@ export function buildReport(store, { from, to, brandId = null, brandIds = null, 
     `SELECT COUNT(*) AS orders,
             COALESCE(SUM(CASE WHEN o.status IN ${PAID} THEN o.amount END), 0) AS revenue,
             COUNT(CASE WHEN o.status IN ${PAID} THEN 1 END) AS paid_orders,
-            COALESCE(SUM(CASE WHEN o.status = 'pending_payment' THEN o.amount END), 0) AS receivable,
+            ${DUE} AS receivable,
+            ${COLLECTED} AS collected,
             COUNT(CASE WHEN o.status = 'pending_payment' THEN 1 END) AS receivable_orders,
             COUNT(DISTINCT o.customer_id) AS customers,
             ${BOOKED} AS booked
@@ -48,7 +53,7 @@ export function buildReport(store, { from, to, brandId = null, brandIds = null, 
 
   const byBrand = store.all(
     `SELECT c.brand_id, COUNT(*) AS orders, COALESCE(SUM(CASE WHEN o.status IN ${PAID} THEN o.amount END), 0) AS revenue,
-            COALESCE(SUM(CASE WHEN o.status = 'pending_payment' THEN o.amount END), 0) AS receivable,
+            ${DUE} AS receivable, ${COLLECTED} AS collected,
             COUNT(DISTINCT o.customer_id) AS customers, ${BOOKED} AS booked,
             COUNT(DISTINCT CASE WHEN EXISTS (SELECT 1 FROM orders p WHERE p.customer_id = o.customer_id AND p.status != 'cancelled' AND ${PDAY} < ?) THEN o.customer_id END) AS repeat_customers
      ${base} GROUP BY c.brand_id ORDER BY ${basis === 'order' ? 'booked' : 'revenue'} DESC`,
