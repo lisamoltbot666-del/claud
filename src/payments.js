@@ -6,7 +6,7 @@ import { today } from './dates.js';
 
 export const PAYMENT_KINDS = { deposit: '訂金', balance: '尾款', full: '全額', cancel_fee: '取消費', refund: '退款', other: '其他' };
 // 已取消的訂單只能記這兩種
-const CANCELLED_KINDS = new Set(['cancel_fee', 'refund']);
+const CANCELLED_KINDS = new Set(['cancel_fee', 'refund', 'deposit']); // deposit：補記取消前已收的訂金
 export const PAYMENT_METHODS = { transfer: '匯款', cash_driver: '現金交司機', cash: '現金（現場）', card: '刷卡', other: '其他' };
 const SETTLED = new Set(['paid', 'shipped', 'completed']);
 
@@ -28,7 +28,7 @@ export function addPayment(store, config, orderId, { amount, kind, method, paid_
   const n = Math.round(Number(String(amount ?? '').replace(/[,\s]/g, '')));
   if (!Number.isFinite(n) || n <= 0) throw new Error('請輸入收款金額');
   if (kind && !PAYMENT_KINDS[kind]) throw new Error('收款類型不正確');
-  if (o.status === 'cancelled' && !CANCELLED_KINDS.has(kind)) throw new Error('已取消的訂單只能記錄「退款」或「取消費」');
+  if (o.status === 'cancelled' && !CANCELLED_KINDS.has(kind)) throw new Error('已取消的訂單只能記錄「退款」「取消費」或補記「訂金」');
   if (kind === 'refund' && n > Math.max(0, o.paid_amount || 0)) throw new Error(`退款不能超過已收的 NT$${Math.max(0, o.paid_amount || 0)}`);
   if (method && !PAYMENT_METHODS[method]) throw new Error('收款方式不正確');
   const day = paidOn || today(config.tz);
