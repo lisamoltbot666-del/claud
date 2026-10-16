@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { getConfig } from '../src/config.js';
 import { addDays, today } from '../src/dates.js';
 import { openDb } from '../src/db.js';
-import { assignDriver, dispatchBoard, dispatchText, driverInfoText, listDrivers, saveDriver } from '../src/dispatch.js';
+import { assignDriver, assignManualDriver, dispatchBoard, dispatchText, driverInfoText, listDrivers, saveDriver, setOrderDriverInfo } from '../src/dispatch.js';
 import { buildFocusList } from '../src/focus.js';
 import { createApp } from '../src/server.js';
 
@@ -115,4 +115,26 @@ test('客戶紀錄保留當時的司機與車輛；司機換車後舊訂單不�
   assignDriver(store, unpaid.id, null);
   assert.equal(store.getOrder(unpaid.id).driver_plate_snap, null, '取消指派會清掉');
   assert.equal(driverHistory(store, c.id).length, 1);
+});
+
+test('直接輸入司機與車輛：新司機自動加入名單、電話相同沿用；本趟換車不影響名單', () => {
+  const { store, paid, unpaid } = setup();
+  assert.throws(() => assignManualDriver(store, paid.id, { name: ' ' }), /姓名/);
+  const o = assignManualDriver(store, paid.id, { name: '陳司機', phone: '0988-111-222', plate: 'RBC-5678', car_model: 'Alphard 白' });
+  assert.equal(o.status, 'shipped');
+  assert.equal(o.driver_plate_snap, 'RBC-5678');
+  assert.equal(listDrivers(store).length, 1, '加入名單');
+  // 同一支電話（格式不同）→ 沿用原本的司機，但本趟車號用新輸入的
+  const o2 = assignManualDriver(store, unpaid.id, { name: '陳司機', phone: '0988111222', plate: 'XYZ-0001' });
+  assert.equal(o2.driver_id, o.driver_id);
+  assert.equal(listDrivers(store).length, 1);
+  assert.equal(o2.driver_plate_snap, 'XYZ-0001');
+  assert.equal(listDrivers(store)[0].plate, 'RBC-5678', '名單不被覆蓋');
+  // 只改本趟
+  setOrderDriverInfo(store, paid.id, { plate: 'TMP-9999', car_model: 'Granvia' });
+  assert.match(dispatchText(store, paid.id), /陳司機｜TMP-9999/);
+  assert.match(driverInfoText(store, paid.id), /車號：TMP-9999（Granvia）/);
+  assert.match(driverInfoText(store, paid.id), /電話：0988-111-222/);
+  assert.equal(listDrivers(store)[0].plate, 'RBC-5678');
+  assert.throws(() => setOrderDriverInfo(store, store.createOrder(paid.customer_id, { order_date: T, amount: 1 }).id, { plate: 'A' }), /先指派/);
 });

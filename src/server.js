@@ -11,7 +11,7 @@ import { SEGMENTS, buildRepurchaseList, customerStats } from './profile.js';
 import { FORWARD_HEADER, forwardStatus, forwardWebhook } from './forward.js';
 import { TEMPLATE_EXAMPLE, TEMPLATE_HEADERS, runImport } from './importer.js';
 import { Auth, ROLES } from './auth.js';
-import { assignDriver, dispatchBoard, dispatchText, driverHistory, driverInfoText, getDriver, listDrivers, saveDriver } from './dispatch.js';
+import { assignDriver, assignManualDriver, dispatchBoard, dispatchText, driverHistory, driverInfoText, getDriver, listDrivers, saveDriver, setOrderDriverInfo } from './dispatch.js';
 import { findDuplicates, mergeCustomers } from './merge.js';
 import { LOST_REASONS, buildFunnel, leadInfo, markLost, reopenLead } from './leads.js';
 import { buildReport } from './report.js';
@@ -446,9 +446,15 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
     }],
     ['POST', /^\/api\/orders\/(\d+)\/driver$/, ([, id], body, _u, req) => {
       const before = mustOrder(toId(id));
-      const o = badRequest(() => assignDriver(store, before.id, body.driver_id ? toId(body.driver_id) : null));
+      // manual：直接輸入司機與車輛（不在名單上的司機會自動加入名單）
+      const o = badRequest(() => (body.manual ? assignManualDriver(store, before.id, body.manual) : assignDriver(store, before.id, body.driver_id ? toId(body.driver_id) : null)));
       const d = o.driver_id ? getDriver(store, o.driver_id) : null;
       log(req, d ? '指派司機' : '取消指派司機', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id}${d ? ` → ${d.name}` : ''}` });
+      return o;
+    }],
+    ['PATCH', /^\/api\/orders\/(\d+)\/driver-info$/, ([, id], body, _u, req) => {
+      const o = badRequest(() => setOrderDriverInfo(store, mustOrder(toId(id)).id, body));
+      log(req, '修改本趟司機／車輛', { customerId: o.customer_id, orderId: o.id, detail: `#${o.id} ${[o.driver_name_snap, o.driver_plate_snap, o.driver_car_snap].filter(Boolean).join(' ')}` });
       return o;
     }],
     ['GET', /^\/api\/orders\/(\d+)\/dispatch$/, ([, id]) => {
