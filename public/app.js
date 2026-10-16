@@ -939,7 +939,22 @@ async function openDispatch(orderId) {
   const dlg = $('#drawer');
   $('#drawer-body').innerHTML = `<div class="row"><h2>派車 #${o.id}</h2><span class="spacer"></span><button class="secondary" id="close-drawer">關閉</button></div>
     <div class="row" style="margin:10px 0"><label>司機 <select id="dispatch-driver"><option value="">— 未指派 —</option>${r.drivers.map((d) => `<option value="${d.id}" ${d.id === o.driver_id ? 'selected' : ''}>${esc(d.name)}${d.plate ? ` ${esc(d.plate)}` : ''}</option>`).join('')}</select></label>
-      ${r.drivers.length ? '' : '<span class="muted">還沒有司機，請到「派車」頁新增</span>'}</div>
+      </div>
+    ${o.driver_id ? `<form id="trip-driver-form" class="grid order-form card" style="margin-bottom:10px">
+      <strong style="grid-column:1/-1">本趟司機與車輛 <span class="muted" style="font-weight:normal">（只改這一趟，例如今天換車；不影響司機名單）</span></strong>
+      <label>司機<input name="name" value="${esc(o.driver_name_snap || r.driver?.name || '')}" required></label>
+      <label>電話<input name="phone" value="${esc(o.driver_phone_snap ?? r.driver?.phone ?? '')}"></label>
+      <label>車號<input name="plate" value="${esc(o.driver_plate_snap ?? r.driver?.plate ?? '')}"></label>
+      <label>車型<input name="car_model" value="${esc(o.driver_car_snap ?? r.driver?.car_model ?? '')}" placeholder="如：Toyota Alphard 白"></label>
+      <div class="row" style="grid-column:1/-1"><button type="submit" class="small">儲存本趟資料</button></div>
+    </form>` : `<details class="card" style="margin-bottom:10px" ${r.drivers.length ? '' : 'open'}><summary><strong>＋ 直接輸入司機與車輛</strong> <span class="muted">（合作車隊、臨時司機等不在名單上的）</span></summary>
+      <form id="manual-driver-form" class="grid order-form" style="margin-top:8px">
+        <label>司機姓名<input name="name" required></label>
+        <label>電話<input name="phone" inputmode="tel"></label>
+        <label>車號<input name="plate" placeholder="如：ABC-1234"></label>
+        <label>車型<input name="car_model" placeholder="如：Toyota Alphard 白"></label>
+        <div class="row" style="grid-column:1/-1"><button type="submit" class="small">指派這位司機</button><span class="muted">會一併加進司機名單，下次直接選；電話或車號相同的司機會沿用原本的資料</span></div>
+      </form></details>`}
     <h3>派車單（給司機）</h3>
     <textarea id="dispatch-text" style="min-height:200px">${esc(r.text)}</textarea>
     <div class="row" style="margin-top:6px">
@@ -960,6 +975,14 @@ async function openDispatch(orderId) {
     currentCustomerId = returnTo;
     openDispatch(o.id);
   });
+  if ($('#manual-driver-form')) $('#manual-driver-form').onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    await api(`/api/orders/${o.id}/driver`, { method: 'POST', body: { manual: Object.fromEntries(new FormData(e.target)) } });
+    toast('已指派司機'); currentCustomerId = returnTo; openDispatch(o.id);
+  }); };
+  if ($('#trip-driver-form')) $('#trip-driver-form').onsubmit = (e) => { e.preventDefault(); guard(async () => {
+    await api(`/api/orders/${o.id}/driver-info`, { method: 'PATCH', body: Object.fromEntries(new FormData(e.target)) });
+    toast('已更新本趟司機與車輛'); currentCustomerId = returnTo; openDispatch(o.id);
+  }); };
   $('#copy-dispatch').onclick = () => guard(async () => { await navigator.clipboard.writeText($('#dispatch-text').value); toast('已複製，可貼到 LINE 群組'); });
   $('#send-driver').onclick = () => guard(async () => {
     await api(`/api/orders/${o.id}/dispatch/driver`, { method: 'POST', body: { text: $('#dispatch-text').value } });

@@ -61,13 +61,52 @@ export function assignDriver(store, orderId, driverId) {
   return store.getOrder(o.id);
 }
 
+// 直接輸入司機與車輛（不在名單上的合作司機、臨時司機）：
+// 電話或車號相同的司機已在名單上就沿用，否則自動加進司機名單，再指派給這張訂單；本趟資料以輸入的為準
+export function assignManualDriver(store, orderId, fields) {
+  const name = String(fields.name || '').trim();
+  if (!name) throw new Error('請輸入司機姓名');
+  const digits = (v) => String(v || '').replace(/\D/g, '');
+  const plateKey = (v) => String(v || '').replace(/[\s-]/g, '').toUpperCase();
+  const phone = digits(fields.phone);
+  const plate = plateKey(fields.plate);
+  let d = listDrivers(store).find((x) => (phone.length >= 8 && digits(x.phone) === phone) || (plate && plateKey(x.plate) === plate));
+  if (d && !d.active) saveDriver(store, d.id, { active: 1 });
+  if (!d) d = saveDriver(store, null, { name, phone: fields.phone, plate: fields.plate, car_model: fields.car_model, note: '派車時新增' });
+  assignDriver(store, orderId, d.id);
+  return setOrderDriverInfo(store, orderId, { name, phone: fields.phone, plate: fields.plate, car_model: fields.car_model });
+}
+
+// 只改這一趟的司機／車輛資料（例如司機今天開另一台車），不影響司機名單
+export function setOrderDriverInfo(store, orderId, fields) {
+  const o = store.getOrder(orderId);
+  if (!o) throw new Error('找不到訂單');
+  if (!o.driver_id) throw new Error('請先指派司機');
+  const v = (k, snap) => (k in fields ? String(fields[k] || '').trim() || null : o[snap]);
+  store.run('UPDATE orders SET driver_name_snap = ?, driver_phone_snap = ?, driver_plate_snap = ?, driver_car_snap = ?, updated_at = ? WHERE id = ?',
+    v('name', 'driver_name_snap') || getDriver(store, o.driver_id).name, v('phone', 'driver_phone_snap'), v('plate', 'driver_plate_snap'), v('car_model', 'driver_car_snap'), new Date().toISOString(), o.id);
+  return store.getOrder(o.id);
+}
+
+// 這張訂單本趟的司機資料：以指派當下（或之後修改）的紀錄為準
+function tripDriver(store, o) {
+  if (!o?.driver_id) return null;
+  const d = getDriver(store, o.driver_id) || {};
+  return {
+    name: o.driver_name_snap || d.name,
+    phone: o.driver_phone_snap ?? d.phone,
+    plate: o.driver_plate_snap ?? d.plate,
+    car_model: o.driver_car_snap ?? d.car_model,
+  };
+}
+
 // 給司機的派車單
 export function dispatchText(store, orderId) {
   const o = store.getOrder(orderId);
   if (!o) throw new Error('找不到訂單');
   const c = store.getCustomer(o.customer_id);
   const brand = store.getBrand(c.brand_id);
-  const d = o.driver_id ? getDriver(store, o.driver_id) : null;
+  const d = tripDriver(store, o);
   const fmt = (n) => `NT$${n.toLocaleString('en-US')}`;
   const { paid, due } = balanceOf(o);
   const payment = o.status !== 'pending_payment' ? `已付款 ${fmt(o.amount)}`
@@ -91,7 +130,7 @@ export function dispatchText(store, orderId) {
 // 傳給客人的司機資訊
 export function driverInfoText(store, orderId) {
   const o = store.getOrder(orderId);
-  const d = o?.driver_id ? getDriver(store, o.driver_id) : null;
+  const d = tripDriver(store, o);
   if (!d) throw new Error('這筆訂單還沒指派司機');
   const c = store.getCustomer(o.customer_id);
   const brand = store.getBrand(c.brand_id);
