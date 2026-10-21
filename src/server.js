@@ -761,9 +761,14 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
           fs.rmSync(file, { force: true });
         }
       }
-      const exports = { '/api/export/customers.csv': ['customers', exportCustomersCsv], '/api/export/orders.csv': ['orders', exportOrdersCsv], '/api/import/template.csv': ['import-template', () => toCsv(TEMPLATE_HEADERS.map((h, i) => [i, h]), [TEMPLATE_EXAMPLE])] };
+      // 整批匯出客戶與訂單只限管理員，避免單一客服帳號被盜就外洩全部名單
+      const exports = { '/api/export/customers.csv': ['customers', exportCustomersCsv, '匯出客戶 CSV'], '/api/export/orders.csv': ['orders', exportOrdersCsv, '匯出訂單 CSV'], '/api/import/template.csv': ['import-template', () => toCsv(TEMPLATE_HEADERS.map((h, i) => [i, h]), [TEMPLATE_EXAMPLE])] };
       if (req.method === 'GET' && exports[url.pathname]) {
-        const [name, fn] = exports[url.pathname];
+        const [name, fn, action] = exports[url.pathname];
+        if (action) {
+          if (req.user.role !== 'admin') throw new HttpError(403, '只有管理員可以匯出名單');
+          log(req, action);
+        }
         return send(res, 200, fn(brandParam(url)), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}-${today(config.tz)}.csv"` });
       }
 

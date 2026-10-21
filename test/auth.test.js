@@ -129,9 +129,12 @@ test('客服帳號：權限、操作紀錄、訊息記錄是誰送的、停用�
   assert.equal(sent.status, 200);
   assert.equal(pushes.length, 1);
   // 客服不能做管理員的事
-  for (const [path, method, body] of [['/api/users', 'GET'], ['/api/brands', 'POST', { name: 'x' }], [`/api/brands/${brand.id}`, 'PATCH', { name: 'x' }], ['/api/import', 'POST', { csv: 'a' }], [`/api/customers/${cust.id}`, 'DELETE'], ['/api/export/backup.db', 'GET'], ['/api/activity', 'GET']]) {
+  for (const [path, method, body] of [['/api/users', 'GET'], ['/api/brands', 'POST', { name: 'x' }], [`/api/brands/${brand.id}`, 'PATCH', { name: 'x' }], ['/api/import', 'POST', { csv: 'a' }], [`/api/customers/${cust.id}`, 'DELETE'], ['/api/export/backup.db', 'GET'], ['/api/export/customers.csv', 'GET'], ['/api/export/orders.csv', 'GET'], ['/api/activity', 'GET']]) {
     assert.equal((await amy(path, { method, body })).status, 403, `${method} ${path}`);
   }
+  assert.equal((await amy('/api/import/template.csv')).status, 200, '客服仍可下載匯入範本');
+  assert.equal((await boss('/api/export/customers.csv')).status, 200);
+  assert.ok(store.listActivity({ limit: 50 }).some((a) => a.action === '匯出客戶 CSV'), '匯出會記在操作紀錄');
 
   const detail = (await boss(`/api/customers/${cust.id}`)).data;
   assert.equal(detail.messages.at(-1).staff_name, '小艾');

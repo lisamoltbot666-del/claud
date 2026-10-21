@@ -63,7 +63,7 @@
         <input id="customer-q" type="search" placeholder="搜尋名稱、電話、備註…">
         <input id="customer-tag" type="search" placeholder="標籤" size="8">
         <span class="spacer"></span>
-        <a class="button secondary" id="export-customers" href="/api/export/customers.csv">匯出 CSV</a>
+        <a class="button secondary admin-only" id="export-customers" href="/api/export/customers.csv">匯出 CSV</a>
         <button id="find-duplicates" class="secondary">找重複客戶</button>
         <button id="import-data" class="secondary admin-only">匯入舊資料</button>
         <button id="new-customer">新增客戶</button>
@@ -76,7 +76,7 @@
         <select id="order-when"><option value="upcoming">即將用車（7 天內）</option><option value="">全部訂單</option></select>
         <select id="order-status"><option value="">全部狀態</option></select>
         <span class="spacer"></span>
-        <a class="button secondary" id="export-orders" href="/api/export/orders.csv">匯出訂單 CSV</a>
+        <a class="button secondary admin-only" id="export-orders" href="/api/export/orders.csv">匯出訂單 CSV</a>
       </div>
       <div class="table-wrap"><table id="order-table"></table></div>
     </section>
