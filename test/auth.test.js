@@ -86,6 +86,24 @@ test('登入嘗試過多會暫時鎖住', async (t) => {
   assert.equal((await c('/api/login', { method: 'POST', body: { username: 'admin', password: 'boss-pass' } })).status, 429);
 });
 
+test('偽造 X-Forwarded-For 換 IP 也繞不過：同一帳號錯太多次會鎖住', async (t) => {
+  const { client } = await startApp(t);
+  const c = client();
+  for (let i = 0; i < 20; i++) {
+    await c('/api/login', { method: 'POST', body: { username: 'admin', password: 'nope' }, headers: { 'x-forwarded-for': `10.0.0.${i}` } });
+  }
+  const r = await c('/api/login', { method: 'POST', body: { username: 'ADMIN', password: 'boss-pass' }, headers: { 'x-forwarded-for': '10.0.1.1' } });
+  assert.equal(r.status, 429);
+});
+
+test('回應帶安全標頭：禁止被其他網站嵌入、不猜檔案類型', async (t) => {
+  const { client } = await startApp(t);
+  const r = await client()('/login');
+  assert.equal(r.headers.get('x-frame-options'), 'DENY');
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+});
+
 test('客服帳號：權限、操作紀錄、訊息記錄是誰送的、停用後立即登出', async (t) => {
   const { store, brand, client, pushes } = await startApp(t);
   const boss = client();

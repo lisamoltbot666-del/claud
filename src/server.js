@@ -54,9 +54,17 @@ function readBody(req, limit = 1_000_000) {
   });
 }
 
+// 禁止後台被其他網站用 iframe 嵌入（點擊劫持）、瀏覽器不自行猜測檔案類型、不把後台網址外流給外部連結
+const SECURITY_HEADERS = {
+  'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "frame-ancestors 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'same-origin',
+};
+
 function send(res, status, body, headers = {}) {
   const isJson = typeof body !== 'string' && !Buffer.isBuffer(body);
-  res.writeHead(status, { 'Content-Type': isJson ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8', ...headers });
+  res.writeHead(status, { 'Content-Type': isJson ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8', ...SECURITY_HEADERS, ...headers });
   res.end(isJson ? JSON.stringify(body) : body);
 }
 
@@ -711,6 +719,7 @@ export function createApp({ store, lines = new LineRegistry(), config, logger = 
         try {
           result = auth.login(body.username, body.password, ip);
         } catch (e) {
+          if (e.status === 401 || e.status === 429) logger.warn?.(`登入失敗：帳號「${String(body.username ?? '').slice(0, 40)}」，IP ${ip}${e.status === 429 ? '（已鎖住）' : ''}`);
           throw new HttpError(e.status || 400, e.message);
         }
         req.user = result.user;
@@ -791,6 +800,7 @@ function main() {
     if (!brands.length) console.warn('⚠ 尚未建立品牌，請到後台「品牌」頁新增並填入 LINE 金鑰');
     for (const b of brands) console.log(`  ${b.name} Webhook：https://<你的網域>/webhook/${b.slug}${b.channel_secret ? '' : '（⚠ 尚未設定金鑰）'}`);
     if (!config.adminPassword) console.warn('⚠ 尚未設定 ADMIN_PASSWORD，後台無法登入');
+    else if (config.adminPassword.length < 12 || config.adminPassword === 'change-me') console.warn('⚠ ADMIN_PASSWORD 太弱（建議 16 字以上、沒在別處用過），請盡快更換');
   });
   const service = new ReminderService({ store, lines, config });
   startScheduler({ service, store, config, baseUrl: process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '' });
