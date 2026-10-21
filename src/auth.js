@@ -39,7 +39,7 @@ export class Auth {
   constructor({ store, config }) {
     this.store = store;
     this.config = config;
-    this.failures = new Map(); // ip → [時間戳]
+    this.failures = new Map(); // ip 或 user:帳號 → [時間戳]
   }
 
   // ---------- 帳號 ----------
@@ -82,11 +82,23 @@ export class Auth {
   }
 
   // ---------- 登入 ----------
-  tooManyFailures(ip) {
+  // 同一 IP 15 分鐘內錯 10 次、或同一帳號錯 20 次（不論 IP；IP 可被 X-Forwarded-For 偽造）就暫時鎖住
+  recentFailures(key) {
     const now = Date.now();
-    const recent = (this.failures.get(ip) || []).filter((t) => now - t < 15 * 60_000);
-    this.failures.set(ip, recent);
-    return recent.length >= 10;
+    const recent = (this.failures.get(key) || []).filter((t) => now - t < 15 * 60_000);
+    if (recent.length) this.failures.set(key, recent);
+    else this.failures.delete(key);
+    return recent;
+  }
+
+  tooManyFailures(ip, username = '') {
+    return this.recentFailures(ip).length >= 10 || this.recentFailures(`user:${username}`).length >= 20;
+  }
+
+  recordFailure(key) {
+    // 攻擊者換一堆 IP 時不讓記錄無限長大
+    if (this.failures.size > 10_000) for (const k of [...this.failures.keys()]) this.recentFailures(k);
+    this.failures.set(key, [...this.recentFailures(key), Date.now()]);
   }
 
   checkCredentials(username, password) {
@@ -99,10 +111,12 @@ export class Auth {
   }
 
   login(username, password, ip) {
-    if (this.tooManyFailures(ip)) throw Object.assign(new Error('嘗試次數過多，請 15 分鐘後再試'), { status: 429 });
+    const account = String(username ?? '').trim().toLowerCase();
+    if (this.tooManyFailures(ip, account)) throw Object.assign(new Error('嘗試次數過多，請 15 分鐘後再試'), { status: 429 });
     const user = this.checkCredentials(username, password);
     if (!user) {
-      this.failures.get(ip).push(Date.now());
+      this.recordFailure(ip);
+      this.recordFailure(`user:${account}`);
       throw Object.assign(new Error('帳號或密碼錯誤'), { status: 401 });
     }
     this.failures.delete(ip);

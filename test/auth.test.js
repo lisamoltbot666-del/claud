@@ -86,6 +86,24 @@ test('登入嘗試過多會暫時鎖住', async (t) => {
   assert.equal((await c('/api/login', { method: 'POST', body: { username: 'admin', password: 'boss-pass' } })).status, 429);
 });
 
+test('偽造 X-Forwarded-For 換 IP 也繞不過：同一帳號錯太多次會鎖住', async (t) => {
+  const { client } = await startApp(t);
+  const c = client();
+  for (let i = 0; i < 20; i++) {
+    await c('/api/login', { method: 'POST', body: { username: 'admin', password: 'nope' }, headers: { 'x-forwarded-for': `10.0.0.${i}` } });
+  }
+  const r = await c('/api/login', { method: 'POST', body: { username: 'ADMIN', password: 'boss-pass' }, headers: { 'x-forwarded-for': '10.0.1.1' } });
+  assert.equal(r.status, 429);
+});
+
+test('回應帶安全標頭：禁止被其他網站嵌入、不猜檔案類型', async (t) => {
+  const { client } = await startApp(t);
+  const r = await client()('/login');
+  assert.equal(r.headers.get('x-frame-options'), 'DENY');
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+});
+
 test('客服帳號：權限、操作紀錄、訊息記錄是誰送的、停用後立即登出', async (t) => {
   const { store, brand, client, pushes } = await startApp(t);
   const boss = client();
@@ -111,9 +129,12 @@ test('客服帳號：權限、操作紀錄、訊息記錄是誰送的、停用�
   assert.equal(sent.status, 200);
   assert.equal(pushes.length, 1);
   // 客服不能做管理員的事
-  for (const [path, method, body] of [['/api/users', 'GET'], ['/api/brands', 'POST', { name: 'x' }], [`/api/brands/${brand.id}`, 'PATCH', { name: 'x' }], ['/api/import', 'POST', { csv: 'a' }], [`/api/customers/${cust.id}`, 'DELETE'], ['/api/export/backup.db', 'GET'], ['/api/activity', 'GET']]) {
+  for (const [path, method, body] of [['/api/users', 'GET'], ['/api/brands', 'POST', { name: 'x' }], [`/api/brands/${brand.id}`, 'PATCH', { name: 'x' }], ['/api/import', 'POST', { csv: 'a' }], [`/api/customers/${cust.id}`, 'DELETE'], ['/api/export/backup.db', 'GET'], ['/api/export/customers.csv', 'GET'], ['/api/export/orders.csv', 'GET'], ['/api/activity', 'GET']]) {
     assert.equal((await amy(path, { method, body })).status, 403, `${method} ${path}`);
   }
+  assert.equal((await amy('/api/import/template.csv')).status, 200, '客服仍可下載匯入範本');
+  assert.equal((await boss('/api/export/customers.csv')).status, 200);
+  assert.ok(store.listActivity({ limit: 50 }).some((a) => a.action === '匯出客戶 CSV'), '匯出會記在操作紀錄');
 
   const detail = (await boss(`/api/customers/${cust.id}`)).data;
   assert.equal(detail.messages.at(-1).staff_name, '小艾');
